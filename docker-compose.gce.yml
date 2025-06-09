@@ -1,0 +1,108 @@
+version: '3.8'
+
+services:
+  # Cloud SQL Proxyを使用する場合はコメントアウトを解除
+  # cloudsql-proxy:
+  #   image: gcr.io/cloudsql-docker/gce-proxy:latest
+  #   command:
+  #     - "/cloud_sql_proxy"
+  #     - "-instances=PROJECT_ID:REGION:INSTANCE_NAME=tcp:3306"
+  #   networks:
+  #     - yuutai-network
+  #   restart: always
+
+  # フロントエンド + Nginx
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "80:80"
+    environment:
+      - API_BASE_URL=http://backend:5001
+    networks:
+      - yuutai-network
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+  # バックエンドAPI
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    expose:
+      - "5001"
+    volumes:
+      # プロジェクトフォルダのDBをGCEにアップロードしてマウント
+      - /mnt/disks/yuutai-data/db:/app/backend/db
+      - /mnt/disks/yuutai-data/cache:/app/backend/cache
+    environment:
+      - NODE_ENV=production
+      - PORT=5001
+      # Cloud Loggingに対応
+      - LOG_LEVEL=info
+      - GCP_PROJECT_ID=${GCP_PROJECT_ID}
+    networks:
+      - yuutai-network
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:5001/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # スクレイピングワーカー
+  scraper:
+    build:
+      context: .
+      dockerfile: Dockerfile.scraper
+    volumes:
+      - /mnt/disks/yuutai-data/db:/app/backend/db
+      - /mnt/disks/yuutai-data/cache:/app/backend/cache
+    environment:
+      - NODE_ENV=production
+      - SCRAPING_INTERVAL=86400000  # 24時間
+      - LOG_LEVEL=info
+      - GCP_PROJECT_ID=${GCP_PROJECT_ID}
+      # Puppeteer用の設定
+      - PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=false
+      - PUPPETEER_ARGS=--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage
+    networks:
+      - yuutai-network
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+
+  # Cloud Logging用のFluentdサイドカー（オプション）
+  # fluentd:
+  #   image: gcr.io/google.com/cloudsdktool/google-fluentd
+  #   volumes:
+  #     - ./fluentd/fluent.conf:/fluentd/etc/fluent.conf
+  #     - /var/log:/var/log
+  #   environment:
+  #     - GOOGLE_APPLICATION_CREDENTIALS=/etc/google/auth/application_default_credentials.json
+  #   networks:
+  #     - yuutai-network
+
+networks:
+  yuutai-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

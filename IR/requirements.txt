@@ -1,0 +1,35 @@
+# 株主優待開示情報管理システム - 必要パッケージ
+
+# Notion API
+notion-client>=2.0.0
+
+# HTTP リクエスト
+requests>=2.28.0
+
+# 環境変数管理
+python-dotenv>=0.19.0
+
+# スケジュール実行
+schedule>=1.1.0
+
+# 日付・時刻処理（Python標準ライブラリだが明示）
+# datetime - 標準ライブラリ
+
+# ファイル操作（Python標準ライブラリだが明示）
+# os - 標準ライブラリ
+# mimetypes - 標準ライブラリ
+# tempfile - 標準ライブラリ
+
+# ログ（Python標準ライブラリだが明示）
+# logging - 標準ライブラリ
+
+# 正規表現（Python標準ライブラリだが明示）
+# re - 標準ライブラリ
+
+# JSON操作（Python標準ライブラリだが明示）
+# json - 標準ライブラリ
+
+# 開発・テスト用（オプション）
+# pytest>=6.0.0
+# black>=22.0.0
+# flake8>=4.0.0

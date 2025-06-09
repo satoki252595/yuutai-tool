@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Debug Frontend</title>
+</head>
+<body>
+    <div id="debug">
+        <h1>フロントエンドデバッグ</h1>
+        <div id="status">ロード中...</div>
+        <div id="result"></div>
+    </div>
+
+    <script>
+        async function testAPI() {
+            const status = document.getElementById('status');
+            const result = document.getElementById('result');
+            
+            try {
+                status.textContent = 'API呼び出し中...';
+                
+                const response = await fetch('/api/stocks');
+                console.log('Response status:', response.status);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                console.log('Data received:', data.length, 'stocks');
+                
+                status.textContent = `成功: ${data.length}件の株式データを取得`;
+                
+                // 最初の3件を表示
+                const preview = data.slice(0, 3).map(stock => 
+                    `<div style="border: 1px solid #ccc; margin: 10px; padding: 10px;">
+                        <h3>${stock.code}: ${stock.name}</h3>
+                        <p>株価: ¥${stock.price}</p>
+                        <p>総合利回り: ${stock.totalYield}%</p>
+                        <p>優待数: ${stock.benefitCount}件</p>
+                    </div>`
+                ).join('');
+                
+                result.innerHTML = `<h3>データプレビュー:</h3>${preview}`;
+                
+            } catch (error) {
+                console.error('Error:', error);
+                status.textContent = `エラー: ${error.message}`;
+                result.innerHTML = `<p style="color: red;">エラーの詳細: ${error.stack}</p>`;
+            }
+        }
+        
+        // ページロード時に実行
+        document.addEventListener('DOMContentLoaded', testAPI);
+    </script>
+</body>
+</html>

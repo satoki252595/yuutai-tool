@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  # フロントエンド (Svelte)
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    environment:
+      - VITE_API_BASE_URL=http://backend:5001/api
+    networks:
+      - yuutai-network
+
+  # バックエンド (Node.js API)
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./backend/db:/app/backend/db
+      - ./backend/cache:/app/backend/cache
+    environment:
+      - NODE_ENV=production
+      - PORT=5001
+    networks:
+      - yuutai-network
+    restart: unless-stopped
+
+# データベースとスクレイピングは手動で別端末から実行します
+# docker-compose exec backend npm run db:init
+# docker-compose exec backend npm run fetch-jpx
+# docker-compose exec backend npm run scrape
+# 
+# DBはプロジェクトのbackend/dbフォルダにマウントされます
+
+networks:
+  yuutai-network:
+    driver: bridge
+
+# volumes:
+#   プロジェクトローカルのフォルダを直接マウントするため、
+#   名前付きボリュームは使用しません

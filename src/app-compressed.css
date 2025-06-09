@@ -1,0 +1,30 @@
+/* 圧縮版CSS - 変数統合とショートハンド最適化 */
+:root{--p:#007bff;--s:#28a745;--d:#dc3545;--w:#ffc107;--i:#17a2b8;--lg:#f8f9fa;--g:#6c757d;--dk:#343a40;--b:#dee2e6;--sh:0 2px 4px rgba(0,0,0,.1);--sh-h:0 4px 8px rgba(0,0,0,.15)}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;-webkit-font-smoothing:antialiased;background:var(--lg);color:var(--dk);line-height:1.6}
+.container{max-width:1400px;margin:0 auto;padding:0 20px}
+.header{background:#fff;box-shadow:var(--sh);padding:1.5rem 0;margin-bottom:2rem;position:sticky;top:0;z-index:100}
+.header h1{font-size:2rem;color:var(--p);margin-bottom:.5rem}
+.header p{color:var(--g);font-size:1.1rem}
+.search-section,.filter-section{background:#fff;padding:1.5rem;border-radius:8px;box-shadow:var(--sh);margin-bottom:1rem}
+.filter-section{margin-bottom:2rem}
+.filter-row{display:flex;gap:2rem;flex-wrap:wrap;align-items:center}
+.filter-group{display:flex;align-items:center;gap:.5rem}
+.filter-group label{font:.5rem/1 500;color:var(--dk);white-space:nowrap}
+.filter-group select{padding:.5rem;border:2px solid var(--b);border-radius:4px;font-size:.9rem;background:#fff;cursor:pointer;transition:border-color .2s}
+.filter-group select:focus{outline:0;border-color:var(--p)}
+.search-form{display:flex;gap:1rem;flex-wrap:wrap}
+.search-input{flex:1;min-width:300px;padding:.75rem 1rem;border:2px solid var(--b);border-radius:4px;font-size:1rem;transition:border-color .2s}
+.search-input:focus{outline:0;border-color:var(--p)}
+.btn{padding:.75rem 1.5rem;border:0;border-radius:4px;font-size:1rem;cursor:pointer;transition:all .2s;display:inline-flex;align-items:center;gap:.5rem}
+.btn-primary{background:var(--p);color:#fff}
+.btn-primary:hover{background:#0056b3;transform:translateY(-1px)}
+.btn-secondary{background:var(--g);color:#fff}
+.btn-secondary:hover{background:#5a6268}
+.loading,.no-results{text-align:center;padding:3rem;font-size:1.2rem;color:var(--g)}
+.error{text-align:center;padding:3rem;font-size:1.2rem;color:var(--d);background:#fee;border-radius:8px;margin:2rem 0}
+.stats-section{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;margin-bottom:2rem}
+.stat-card{background:#fff;padding:1.5rem;border-radius:8px;box-shadow:var(--sh);text-align:center}
+.stat-value{font-size:2rem;font-weight:700;color:var(--p)}
+.stat-label{color:var(--g);font-size:.9rem;margin-top:.25rem}
+.stock-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:1.5rem;margin-bottom:3rem}

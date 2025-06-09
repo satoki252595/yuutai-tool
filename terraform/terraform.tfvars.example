@@ -1,0 +1,16 @@
+# プロジェクトID（必須）
+project_id = "your-gcp-project-id"
+
+# リージョン（オプション：デフォルトはasia-northeast1）
+region = "asia-northeast1"
+
+# ゾーン（オプション：デフォルトはasia-northeast1-a）
+zone = "asia-northeast1-a"
+
+# マシンタイプ（オプション：デフォルトはe2-medium）
+# 推奨構成:
+# - 開発/テスト: e2-micro (0.25-2 vCPU, 1GB RAM)
+# - 小規模本番: e2-small (0.5-2 vCPU, 2GB RAM)
+# - 標準本番: e2-medium (1-2 vCPU, 4GB RAM) ← デフォルト
+# - 大規模本番: e2-standard-2 (2 vCPU, 8GB RAM)
+machine_type = "e2-medium"

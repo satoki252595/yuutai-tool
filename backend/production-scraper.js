@@ -1,0 +1,377 @@
+import puppeteer from 'puppeteer';
+import { Database } from './database.js';
+import { YahooFinanceService } from './yahooFinance.js';
+
+export class ProductionShareholderBenefitScraper {
+  constructor() {
+    this.db = new Database();
+    this.yahooFinance = new YahooFinanceService();
+  }
+
+  async scrapeAllStocks() {
+    console.log('=== 優待情報スクレイピング開始 ===');
+    const browser = await puppeteer.launch({ 
+      headless: 'new',
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
+
+    try {
+      // 主要な優待実施企業リスト
+      const stockCodes = this.getTargetStockCodes();
+      console.log(`${stockCodes.length}銘柄の処理を開始します`);
+
+      let successCount = 0;
+      let errorCount = 0;
+      const batchSize = 10;
+
+      // バッチ処理
+      for (let i = 0; i < stockCodes.length; i += batchSize) {
+        const batch = stockCodes.slice(i, i + batchSize);
+        console.log(`\nバッチ ${Math.floor(i/batchSize) + 1}/${Math.ceil(stockCodes.length/batchSize)} を処理中...`);
+        
+        for (const code of batch) {
+          try {
+            const result = await this.scrapeStockBenefit(browser, code);
+            if (result.success) {
+              successCount++;
+              console.log(`✓ ${code}: ${result.name} - ${result.benefitCount}件の優待情報`);
+            } else {
+              errorCount++;
+              console.log(`✗ ${code}: 優待情報なし`);
+            }
+          } catch (error) {
+            errorCount++;
+            console.error(`✗ ${code}: エラー - ${error.message}`);
+          }
+        }
+
+        // レート制限対策（バッチ間で2秒待機）
+        if (i + batchSize < stockCodes.length) {
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+      }
+
+      console.log(`\n=== スクレイピング完了 ===`);
+      console.log(`成功: ${successCount}件, エラー: ${errorCount}件`);
+      
+      // DB内容を確認
+      await this.verifyDatabase();
+
+    } finally {
+      await browser.close();
+      this.db.close();
+    }
+  }
+
+  async scrapeStockBenefit(browser, stockCode) {
+    const page = await browser.newPage();
+    
+    try {
+      // みんかぶから優待情報を取得（主要な情報源）
+      const benefits = await this.scrapeMinkabu(page, stockCode);
+      
+      if (benefits.length === 0) {
+        return { success: false };
+      }
+
+      // Yahoo Finance APIから株価情報を取得
+      const stockInfo = await this.yahooFinance.getStockPrice(stockCode);
+
+      // 株式情報をDBに保存
+      await this.db.upsertStock({
+        code: stockCode,
+        name: stockInfo.name,
+        market: stockInfo.market || '東証',
+        sector: this.detectSector(stockInfo.name)
+      });
+
+      // 株価履歴を保存
+      await this.db.insertPriceHistory(stockInfo);
+
+      // 既存の優待情報を削除
+      await this.db.deleteBenefitsByStockCode(stockCode);
+
+      // 新しい優待情報を保存
+      for (const benefit of benefits) {
+        await this.db.insertBenefit(benefit);
+      }
+
+      return {
+        success: true,
+        name: stockInfo.name,
+        benefitCount: benefits.length
+      };
+
+    } catch (error) {
+      throw error;
+    } finally {
+      await page.close();
+    }
+  }
+
+  async scrapeMinkabu(page, stockCode) {
+    const benefits = [];
+    
+    try {
+      // みんかぶの優待ページにアクセス
+      await page.goto(`https://minkabu.jp/stock/${stockCode}/yutai`, {
+        waitUntil: 'networkidle2',
+        timeout: 30000
+      });
+
+      // ページが正しく読み込まれたか確認
+      const pageTitle = await page.title();
+      if (!pageTitle.includes('優待') && !pageTitle.includes('株主優待')) {
+        return benefits;
+      }
+
+      // 優待情報を取得
+      const minkabuData = await page.evaluate(() => {
+        const result = {
+          benefits: [],
+          exRightsMonth: []
+        };
+
+        // 優待内容テーブルを探す（通常2番目のテーブル）
+        const tables = document.querySelectorAll('table.md_table');
+        if (tables.length > 1) {
+          const benefitTable = tables[1];
+          const rows = benefitTable.querySelectorAll('tbody tr');
+          
+          rows.forEach(row => {
+            const cells = row.querySelectorAll('td');
+            if (cells.length >= 2) {
+              const sharesText = cells[0]?.textContent?.trim();
+              const contentText = cells[1]?.textContent?.trim();
+              
+              if (sharesText && contentText && contentText.length > 5) {
+                const shares = parseInt(sharesText.replace(/[^0-9]/g, '')) || 100;
+                result.benefits.push({
+                  minShares: shares,
+                  description: contentText
+                });
+              }
+            }
+          });
+        }
+
+        // 権利確定月を探す
+        const allText = document.body.textContent || '';
+        
+        // 複数の権利確定月パターンに対応
+        const monthPatterns = [
+          /権利確定月[：:]\s*(\d{1,2})月/g,
+          /(\d{1,2})月[・、](\d{1,2})月/g,
+          /権利確定日[：:]\s*(\d{1,2})月/g
+        ];
+        
+        for (const pattern of monthPatterns) {
+          let match;
+          while ((match = pattern.exec(allText)) !== null) {
+            if (match[1]) result.exRightsMonth.push(parseInt(match[1]));
+            if (match[2]) result.exRightsMonth.push(parseInt(match[2]));
+          }
+        }
+
+        // 重複を削除
+        result.exRightsMonth = [...new Set(result.exRightsMonth)];
+        
+        return result;
+      });
+
+      // データを整形
+      const { benefits: minkabuBenefits, exRightsMonth } = minkabuData;
+      
+      // 権利確定月が複数ある場合、各月で優待情報を作成
+      const months = exRightsMonth.length > 0 ? exRightsMonth : [3]; // デフォルトは3月
+      
+      minkabuBenefits.forEach(data => {
+        // 各権利確定月に対して優待情報を作成
+        months.forEach(month => {
+          benefits.push({
+            stockCode: stockCode,
+            benefitType: this.detectBenefitType(data.description),
+            description: this.cleanDescription(data.description),
+            monetaryValue: this.estimateValue(data.description),
+            minShares: data.minShares,
+            holderType: 'どちらでも',
+            exRightsMonth: month
+          });
+        });
+      });
+
+    } catch (error) {
+      console.error(`  みんかぶ取得エラー (${stockCode}): ${error.message}`);
+    }
+
+    return benefits;
+  }
+
+  detectBenefitType(description) {
+    if (description.includes('商品券')) return '商品券';
+    if (description.includes('クオカード') || description.includes('QUO')) return 'クオカード';
+    if (description.includes('優待券') || description.includes('割引')) return '優待券';
+    if (description.includes('カタログ')) return 'カタログギフト';
+    if (description.includes('自社製品') || description.includes('自社商品')) return '自社製品';
+    if (description.includes('食事券')) return '優待券';
+    if (description.includes('ポイント')) return 'その他';
+    return 'その他';
+  }
+
+  cleanDescription(description) {
+    return description
+      .replace(/\s+/g, ' ')
+      .replace(/^\s+|\s+$/g, '')
+      .substring(0, 200);
+  }
+
+  estimateValue(description) {
+    // 金額が明記されている場合
+    const patterns = [
+      /([0-9,]+)円相当/,
+      /([0-9,]+)円分/,
+      /([0-9,]+)円/,
+      /([0-9,]+)ポイント/
+    ];
+    
+    for (const pattern of patterns) {
+      const match = description.match(pattern);
+      if (match) {
+        return parseInt(match[1].replace(/,/g, ''));
+      }
+    }
+    
+    // パーセント割引の場合
+    const percentMatch = description.match(/(\d+)[%％]/);
+    if (percentMatch) {
+      const percent = parseInt(percentMatch[1]);
+      if (percent === 100) return 10000; // 100%割引は特別
+      return Math.round(10000 * percent / 100);
+    }
+    
+    // 枚数から推定
+    const sheetMatch = description.match(/(\d+)枚/);
+    if (sheetMatch) {
+      const sheets = parseInt(sheetMatch[1]);
+      if (description.includes('500円')) return 500 * sheets;
+      if (description.includes('1000円') || description.includes('1,000円')) return 1000 * sheets;
+      return 500 * sheets; // デフォルト500円券
+    }
+    
+    // キーワードベースの推定
+    if (description.includes('食事券')) return 3000;
+    if (description.includes('クオカード')) return 1000;
+    if (description.includes('割引')) return 2000;
+    if (description.includes('キャッシュバック')) return 3000;
+    
+    return 1000; // デフォルト
+  }
+
+  detectSector(companyName) {
+    // 企業名からセクターを推測
+    const sectorKeywords = {
+      '食品': ['食品', 'フード', 'ビール', '飲料', '製菓'],
+      '外食': ['レストラン', 'すかいらーく', 'マクドナルド', '吉野家', 'アトム'],
+      '小売': ['イオン', '百貨店', 'ストア', 'マート', 'ドラッグ'],
+      '金融': ['銀行', 'ホールディングス', '証券', '保険', 'ファイナンス'],
+      '運輸': ['鉄道', '航空', 'エアライン', 'JR', 'ANA', 'JAL'],
+      'サービス': ['サービス', 'メンテナンス', 'ホテル', 'リゾート'],
+      'エンタメ': ['エンターテインメント', 'ゲーム', 'アミューズメント']
+    };
+    
+    for (const [sector, keywords] of Object.entries(sectorKeywords)) {
+      for (const keyword of keywords) {
+        if (companyName.includes(keyword)) {
+          return sector;
+        }
+      }
+    }
+    
+    return 'その他';
+  }
+
+  getTargetStockCodes() {
+    // 主要な優待実施企業のコード
+    return [
+      // 食品・外食
+      '2702', '3197', '7412', '9861', '3053', '3387', '7616', '2212', '2801', '2897',
+      '3543', '8200', '7522', '7611', '7630', '9828', '9936', '9945', '9979', '3198',
+      
+      // 小売
+      '8267', '3099', '3092', '2651', '2698', '3141', '3548', '7545', '8278', '7514',
+      '3333', '7455', '3088', '3222', '7512', '7513', '8233', '8252', '8273', '3086',
+      
+      // エンタメ・サービス
+      '4661', '9681', '9616', '2412', '4680', '4681', '9631', '9633', '9635', '9637',
+      '9672', '9675', '2379', '3232', '4344', '4665', '6504', '9024', '9044', '9663',
+      
+      // 金融
+      '8306', '8316', '8411', '8591', '8604', '8572', '8593', '8595', '8596', '8601',
+      '7182', '8439', '8473', '8515', '8566', '8570', '8586', '8697', '8698', '8713',
+      
+      // 運輸・インフラ
+      '9201', '9202', '9020', '9041', '9142', '9044', '9045', '9048', '9052', '9058',
+      '9001', '9003', '9005', '9006', '9007', '9008', '9009', '9021', '9031', '9033',
+      
+      // その他有名企業
+      '4452', '4543', '4689', '4755', '6073', '6178', '7164', '7201', '7203', '7267',
+      '7272', '7832', '8001', '8002', '8015', '8031', '8053', '8058', '9101', '9104'
+    ];
+  }
+
+  async verifyDatabase() {
+    console.log('\n=== データベース確認 ===');
+    
+    try {
+      const stockCount = await new Promise((resolve, reject) => {
+        this.db.db.get('SELECT COUNT(*) as count FROM stocks', (err, row) => {
+          err ? reject(err) : resolve(row.count);
+        });
+      });
+      
+      const benefitCount = await new Promise((resolve, reject) => {
+        this.db.db.get('SELECT COUNT(*) as count FROM shareholder_benefits', (err, row) => {
+          err ? reject(err) : resolve(row.count);
+        });
+      });
+      
+      const priceCount = await new Promise((resolve, reject) => {
+        this.db.db.get('SELECT COUNT(*) as count FROM price_history', (err, row) => {
+          err ? reject(err) : resolve(row.count);
+        });
+      });
+      
+      console.log(`登録銘柄数: ${stockCount}`);
+      console.log(`優待情報数: ${benefitCount}`);
+      console.log(`株価履歴数: ${priceCount}`);
+      
+      // 優待情報がある銘柄の例を表示
+      const samples = await new Promise((resolve, reject) => {
+        this.db.db.all(`
+          SELECT s.code, s.name, COUNT(b.id) as benefit_count
+          FROM stocks s
+          JOIN shareholder_benefits b ON s.code = b.stock_code
+          GROUP BY s.code
+          ORDER BY benefit_count DESC
+          LIMIT 5
+        `, (err, rows) => {
+          err ? reject(err) : resolve(rows);
+        });
+      });
+      
+      console.log('\n優待情報が多い銘柄TOP5:');
+      samples.forEach(row => {
+        console.log(`  ${row.code}: ${row.name} (${row.benefit_count}件)`);
+      });
+      
+    } catch (error) {
+      console.error('データベース確認エラー:', error);
+    }
+  }
+}
+
+// スクレイピング実行
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const scraper = new ProductionShareholderBenefitScraper();
+  scraper.scrapeAllStocks().catch(console.error);
+}
