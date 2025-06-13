@@ -279,6 +279,13 @@ export class JPXDataFetcher {
       throw error;
     }
   }
+
+  /**
+   * fetchAndCacheData - fetchLatestDataのエイリアス（後方互換性のため）
+   */
+  async fetchAndCacheData(useCache = true) {
+    return this.fetchLatestData(useCache);
+  }
 }
 
 // 実行部分

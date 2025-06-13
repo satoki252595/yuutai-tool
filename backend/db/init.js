@@ -13,8 +13,11 @@ db.serialize(() => {
     CREATE TABLE IF NOT EXISTS stocks (
       code TEXT PRIMARY KEY,
       name TEXT NOT NULL,
+      japanese_name TEXT,
       market TEXT,
       sector TEXT,
+      industry TEXT,
+      rsi REAL,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
@@ -30,6 +33,9 @@ db.serialize(() => {
       min_shares INTEGER NOT NULL,
       holder_type TEXT DEFAULT 'どちらでも',
       ex_rights_month INTEGER NOT NULL,
+      has_long_term_holding INTEGER DEFAULT 0,
+      long_term_months INTEGER,
+      long_term_value INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (stock_code) REFERENCES stocks(code)
     )
@@ -42,6 +48,8 @@ db.serialize(() => {
       stock_code TEXT NOT NULL,
       price REAL NOT NULL,
       dividend_yield REAL DEFAULT 0,
+      annual_dividend REAL DEFAULT 0,
+      data_source TEXT,
       recorded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (stock_code) REFERENCES stocks(code)
     )

@@ -29,8 +29,9 @@ export class Database {
     return new Promise((resolve, reject) => {
       const sql = `
         INSERT INTO shareholder_benefits 
-        (stock_code, benefit_type, description, monetary_value, min_shares, holder_type, ex_rights_month, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        (stock_code, benefit_type, description, monetary_value, min_shares, holder_type, ex_rights_month, 
+         has_long_term_holding, long_term_months, long_term_value, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `;
       this.db.run(sql, [
         benefit.stock_code || benefit.stockCode,
@@ -40,6 +41,9 @@ export class Database {
         benefit.min_shares || benefit.minShares,
         benefit.holder_type || benefit.holderType,
         benefit.ex_rights_month || benefit.exRightsMonth,
+        benefit.has_long_term_holding || benefit.hasLongTermHolding || 0,
+        benefit.long_term_months || benefit.longTermMonths,
+        benefit.long_term_value || benefit.longTermValue || 0,
         benefit.created_at || new Date().toISOString()
       ], (err) => {
         if (err) reject(err);

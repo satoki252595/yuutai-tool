@@ -2,7 +2,7 @@
   import { createEventDispatcher } from 'svelte';
   import { 
     formatPrice, formatPercent, getMonthName, getBenefitTypeColor,
-    getRSIColor, getRSIStatus
+    getRSIColor, getRSIStatus, formatRightsMonths
   } from './utils.js';
   
   export let stock;
@@ -101,7 +101,7 @@
               >
                 {benefit.benefit_type || 'その他'}
               </span>
-              <span class="benefit-month">{getMonthName(benefit.ex_rights_month || 3)}権利</span>
+              <span class="benefit-month">{formatRightsMonths(benefit.rightsMonths || benefit.ex_rights_month || 3)}</span>
             </div>
             <p class="benefit-description">{benefit.description || '詳細情報なし'}</p>
             <div class="benefit-details">

@@ -202,6 +202,22 @@ export class RSICalculator {
     return results;
   }
 
+  /**
+   * 単一銘柄のRSIを計算（簡易版）
+   * @param {string} stockCode - 銘柄コード
+   * @param {number} period - RSI期間（デフォルト14）
+   * @returns {Promise<number|null>} RSI値またはnull
+   */
+  async calculate(stockCode, period = 14) {
+    try {
+      const prices = await this.getPriceHistory(stockCode, period + 10);
+      return this.calculateRSI(prices, period);
+    } catch (error) {
+      console.error(`Error calculating RSI for ${stockCode}:`, error);
+      return null;
+    }
+  }
+
   close() {
     this.db.close();
   }
