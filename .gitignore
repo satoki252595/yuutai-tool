@@ -33,4 +33,4 @@ lerna-debug.log*
 *.tsbuildinfo
 
 # Package locks (using npm workspaces)
-package-lock.json
+# package-lock.json - needed for Docker builds
