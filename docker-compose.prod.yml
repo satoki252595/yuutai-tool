@@ -34,8 +34,8 @@ services:
       context: .
       dockerfile: Dockerfile.backend
     volumes:
-      - db-data:/app/backend/db
-      - cache-data:/app/backend/cache
+      - ./backend/db:/app/backend/db
+      - ./backend/cache:/app/backend/cache
     environment:
       - NODE_ENV=production
       - PORT=5001
@@ -48,36 +48,16 @@ services:
       timeout: 10s
       retries: 3
 
-  # スクレイピングワーカー
-  scraper:
-    build:
-      context: .
-      dockerfile: Dockerfile.scraper
-    volumes:
-      - db-data:/app/backend/db
-      - cache-data:/app/backend/cache
-    environment:
-      - NODE_ENV=production
-      - SCRAPING_INTERVAL=86400000  # 24時間ごと
-    networks:
-      - yuutai-network
-    depends_on:
-      - backend
-    restart: always
-    deploy:
-      resources:
-        limits:
-          cpus: '2'
-          memory: 4G
+  # スクレイピングはローカルで実行し、DBファイルをアップロードする方式に変更
+  # 手順:
+  # 1. ローカルで npm run setup を実行
+  # 2. backend/db/yuutai.db をGCEにアップロード
+  # 3. docker-compose exec backend chown nodejs:nodejs /app/backend/db/yuutai.db
 
 networks:
   yuutai-network:
     driver: bridge
 
 volumes:
-  db-data:
-    driver: local
-  cache-data:
-    driver: local
   static-content:
     driver: local

@@ -104,6 +104,9 @@ cd yuutai-investment-tool
 # docker-compose.prod.yml を使用
 cp docker-compose.prod.yml docker-compose.yml
 
+# 必要なディレクトリを作成
+mkdir -p backend/db backend/cache
+
 # 環境変数設定（必要に応じて）
 cat > .env << 'EOF'
 NODE_ENV=production
@@ -114,7 +117,7 @@ EOF
 ### アプリケーション起動：
 
 ```bash
-# Docker Composeでビルド・起動
+# Docker Composeでビルド・起動（scraperコンテナは含まれません）
 docker-compose up -d --build
 
 # ログ確認
@@ -124,12 +127,40 @@ docker-compose logs -f
 docker-compose ps
 ```
 
-## 6. 初期セットアップ実行
+## 6. データベースのアップロード
+
+優待情報のスクレイピングは**ローカル環境**で実行し、生成されたDBファイルをGCEにアップロードします。
+
+### ローカル環境での作業：
 
 ```bash
-# アプリケーションコンテナ内でセットアップ実行
-docker-compose exec backend npm run setup
+# ローカル環境でスクレイピングを実行
+cd /path/to/yuutai-investment-tool
+npm run setup
+
+# 生成されたDBファイルをGCEにアップロード
+gcloud compute scp backend/db/yuutai.db yuutai-app:~/yuutai-investment-tool/backend/db/ --zone=us-central1-a
 ```
+
+### GCE上での作業：
+
+```bash
+# DBファイルの権限を修正（コンテナ内のnodejsユーザーがアクセスできるように）
+cd ~/yuutai-investment-tool
+docker-compose exec backend chown nodejs:nodejs /app/backend/db/yuutai.db
+
+# バックエンドを再起動
+docker-compose restart backend
+
+# ログを確認して正常に起動しているか確認
+docker-compose logs --tail=50 backend
+```
+
+### データ更新時の手順：
+
+1. ローカル環境で`npm run setup`を実行して最新データを取得
+2. `gcloud compute scp`でDBファイルをアップロード
+3. GCE上で権限を修正してバックエンドを再起動
 
 ## 7. Nginxリバースプロキシ設定（オプション）
 
@@ -174,8 +205,8 @@ sudo certbot --nginx -d YOUR_DOMAIN.com
 # Docker自動起動設定
 sudo systemctl enable docker
 
-# Docker Composeサービスファイル作成
-sudo tee /etc/systemd/system/yuutai-app.service << 'EOF'
+# Docker Composeサービスファイル作成（USERNAMEは自動的に置換される）
+sudo tee /etc/systemd/system/yuutai-app.service << EOF
 [Unit]
 Description=Yuutai Investment Tool
 Requires=docker.service
@@ -184,7 +215,7 @@ After=docker.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-WorkingDirectory=/home/USERNAME/yuutai-investment-tool
+WorkingDirectory=/home/$USER/yuutai-investment-tool
 ExecStart=/usr/local/bin/docker-compose up -d
 ExecStop=/usr/local/bin/docker-compose down
 TimeoutStartSec=0
@@ -192,9 +223,6 @@ TimeoutStartSec=0
 [Install]
 WantedBy=multi-user.target
 EOF
-
-# USERNAMEを実際のユーザー名に置換
-sudo sed -i "s/USERNAME/$USER/g" /etc/systemd/system/yuutai-app.service
 
 # サービス有効化
 sudo systemctl daemon-reload
