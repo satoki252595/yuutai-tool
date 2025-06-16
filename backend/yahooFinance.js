@@ -7,6 +7,9 @@ export class YahooFinanceService {
       queue: {
         concurrency: 2,
         timeout: 10000
+      },
+      validation: {
+        logErrors: false  // バリデーションエラーのログを抑制
       }
     });
   }
@@ -17,6 +20,13 @@ export class YahooFinanceService {
       const symbol = `${code}.T`;
       const quote = await yahooFinance.quote(symbol);
       
+      // バリデーションエラーのある不正なデータをチェック
+      if (quote.fiftyTwoWeekHigh && quote.fiftyTwoWeekHigh > 1000000000) {
+        console.warn(`異常なデータを検出 (${code}): fiftyTwoWeekHigh=${quote.fiftyTwoWeekHigh}`);
+        // 異常値を修正
+        quote.fiftyTwoWeekHigh = quote.regularMarketPrice || 0;
+      }
+      
       return {
         code: code,
         name: quote.longName || quote.shortName || '',
@@ -25,11 +35,17 @@ export class YahooFinanceService {
         change: quote.regularMarketChange || 0,
         changePercent: quote.regularMarketChangePercent || 0,
         dividendYield: (quote.trailingAnnualDividendYield || 0) * 100, // パーセント表記に変換
+        annualDividend: quote.trailingAnnualDividendRate || 0, // 年間配当金
         market: quote.market || 'TYO',
         lastUpdated: new Date()
       };
     } catch (error) {
-      console.error(`Error fetching stock price for ${code}:`, error.message);
+      // バリデーションエラーの場合は簡潔なメッセージにする
+      if (error.message && error.message.includes('Schema validation')) {
+        console.error(`Yahoo Finance validation error for ${code} - データ形式が不正です`);
+      } else {
+        console.error(`Error fetching stock price for ${code}:`, error.message);
+      }
       throw error;
     }
   }

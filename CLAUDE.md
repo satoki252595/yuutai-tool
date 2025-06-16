@@ -12,12 +12,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `npm run dev` - Svelteフロントエンド開発サーバー
 - `npm run build` - プロダクションビルド
 - `npm run server` - バックエンドAPIサーバー起動
-- `npm run scrape` - 全銘柄の優待情報スクレイピング（旧版）
-- `npm run scrape:fast-resume` - 高速並行スクレイピング（再開可能）
-- `npm run reset:all` - DB完全リセット＋JPX公式データから50銘柄サンプル実行
-- `npm run market:test` - **推奨** JPX公式データからテスト実行（食品業界20銘柄、6ブラウザ）
-- `npm run market:partial` - JPX公式データから部分実行（主要6業界、6ブラウザ並行）
-- `npm run market:full` - **JPX公式データから全市場実行（3,711銘柄、6ブラウザ並行）**
+- `npm run scrape` - 個別銘柄スクレイピング（順次処理）
+- `npm run scrape:parallel` - **推奨** 6並列スクレイピング（高速）
+- `npm run scrape:fast` - 4並列スクレイピング
+- `npm run scrape:turbo` - 8並列スクレイピング
+- `npm run setup` - 全データリセット + セットアップ
+- `npm run setup:industry` - 特定業界のみセットアップ
+- `npm run setup:limit` - 限定数でセットアップ
 - `npm run db:init` - SQLiteデータベース初期化
 
 ## 銘柄データソース

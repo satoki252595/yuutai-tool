@@ -1,315 +1,304 @@
-# GCE (Google Compute Engine) デプロイメントガイド
+# Google Compute Engine (GCE) 無料枠デプロイガイド
 
-## 📋 概要
+優待投資ツールをGCE無料枠インスタンスでDocker Composeを使用して運用するための手順です。
 
-優待投資ツールをGCE上にデプロイするための完全ガイドです。
+## 前提条件
 
-## 🏗️ アーキテクチャ
+- Google Cloud Platform アカウント
+- `gcloud` CLI ツールがインストール済み
+- 基本的なLinux/Docker知識
 
-```
-┌─────────────────┐     ┌─────────────────┐
-│   Cloud DNS     │────▶│   Static IP      │
-└─────────────────┘     └────────┬─────────┘
-                                 │
-                        ┌────────▼─────────┐
-                        │  GCE Instance    │
-                        │                  │
-                        │  ┌────────────┐  │
-                        │  │  Frontend  │  │
-                        │  │  (Nginx)   │  │
-                        │  └──────┬─────┘  │
-                        │         │        │
-                        │  ┌──────▼─────┐  │
-                        │  │  Backend   │  │
-                        │  │  (Node.js) │  │
-                        │  └──────┬─────┘  │
-                        │         │        │
-                        │  ┌──────▼─────┐  │
-                        │  │  Scraper   │  │
-                        │  │ (Puppeteer)│  │
-                        │  └────────────┘  │
-                        └────────┬─────────┘
-                                 │
-                        ┌────────▼─────────┐
-                        │ Persistent Disk  │
-                        │  - Database      │
-                        │  - Cache         │
-                        └──────────────────┘
-```
+## 1. GCEインスタンス作成
 
-## 🚀 クイックスタート
-
-### 前提条件
-
-- GCPアカウントとプロジェクト
-- gcloudコマンドラインツール
-- 課金が有効なプロジェクト
-
-### 1. Terraformを使用した自動構築（推奨）
+### 無料枠の制約内でインスタンスを作成：
 
 ```bash
-# Terraformのインストール（Mac）
-brew install terraform
+# プロジェクト設定（必要に応じて変更）
+gcloud config set project YOUR_PROJECT_ID
 
-# 設定ファイルのコピー
-cd terraform
-cp terraform.tfvars.example terraform.tfvars
-
-# terraform.tfvarsを編集してプロジェクトIDを設定
-vim terraform.tfvars
-
-# リソースの作成
-terraform init
-terraform plan
-terraform apply
-
-# 出力されたIPアドレスとSSHコマンドを確認
-terraform output
-```
-
-### 2. 手動セットアップ
-
-#### Step 1: GCEインスタンスの作成
-
-```bash
-# プロジェクトIDを設定
-export PROJECT_ID=your-project-id
-export ZONE=asia-northeast1-a
-
-# インスタンスの作成
+# 無料枠インスタンス作成（us-central1, us-west1, us-east1のいずれかを選択）
 gcloud compute instances create yuutai-app \
-  --project=$PROJECT_ID \
-  --zone=$ZONE \
-  --machine-type=e2-medium \
-  --network-interface=network-tier=PREMIUM,subnet=default \
-  --maintenance-policy=MIGRATE \
-  --tags=http-server,https-server \
-  --create-disk=auto-delete=yes,boot=yes,device-name=yuutai-app,image=projects/ubuntu-os-cloud/global/images/ubuntu-2204-jammy-v20240319,mode=rw,size=20 \
-  --no-shielded-secure-boot \
-  --shielded-vtpm \
-  --shielded-integrity-monitoring \
-  --reservation-affinity=any
-
-# 永続ディスクの作成
-gcloud compute disks create yuutai-data \
-  --size=20GB \
-  --zone=$ZONE \
-  --project=$PROJECT_ID
-
-# ディスクのアタッチ
-gcloud compute instances attach-disk yuutai-app \
-  --disk=yuutai-data \
-  --zone=$ZONE \
-  --project=$PROJECT_ID
+    --zone=us-central1-a \
+    --machine-type=e2-micro \
+    --subnet=default \
+    --network-tier=PREMIUM \
+    --maintenance-policy=MIGRATE \
+    --service-account=YOUR_PROJECT_ID-compute@developer.gserviceaccount.com \
+    --scopes=https://www.googleapis.com/auth/cloud-platform \
+    --image=ubuntu-2004-focal-v20231213 \
+    --image-project=ubuntu-os-cloud \
+    --boot-disk-size=30GB \
+    --boot-disk-type=pd-standard \
+    --boot-disk-device-name=yuutai-app
 ```
 
-#### Step 2: インスタンスへの接続
+## 2. ファイアウォール設定
 
 ```bash
-# SSHで接続
-gcloud compute ssh yuutai-app --zone=$ZONE --project=$PROJECT_ID
+# HTTP (ポート80) とHTTPS (ポート443) を許可
+gcloud compute firewall-rules create allow-yuutai-http \
+    --allow tcp:80,tcp:443,tcp:3000 \
+    --source-ranges 0.0.0.0/0 \
+    --description "Allow HTTP/HTTPS for yuutai app"
 ```
 
-#### Step 3: 環境セットアップ
+## 3. インスタンスに接続
 
 ```bash
-# リポジトリのクローン
-git clone https://github.com/your-repo/yuutai-tool.git
-cd yuutai-tool
-
-# セットアップスクリプトの実行
-export GCP_PROJECT_ID=your-project-id
-./gce-setup.sh
+gcloud compute ssh yuutai-app --zone=us-central1-a
 ```
 
-#### Step 4: アプリケーションのデプロイ
+## 4. サーバー環境セットアップ
+
+### Docker と Docker Compose のインストール：
 
 ```bash
-# デプロイスクリプトの実行
-./gce-deploy.sh
+# システム更新
+sudo apt update && sudo apt upgrade -y
+
+# 必要パッケージインストール
+sudo apt install -y apt-transport-https ca-certificates curl gnupg lsb-release
+
+# Docker公式GPGキー追加
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+
+# Dockerリポジトリ追加
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+# Docker インストール
+sudo apt update
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+
+# Dockerグループにユーザー追加
+sudo usermod -aG docker $USER
+
+# Docker Compose インストール（スタンドアロン版）
+sudo curl -L "https://github.com/docker/compose/releases/download/v2.24.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+sudo chmod +x /usr/local/bin/docker-compose
+
+# 再ログイン
+exit
 ```
 
-## 🔧 詳細設定
+再度SSHで接続：
+```bash
+gcloud compute ssh yuutai-app --zone=us-central1-a
+```
 
-### メモリ最適化
+## 5. アプリケーションデプロイ
 
-スクレイピング処理でメモリ不足になる場合：
+### ソースコード配置：
 
 ```bash
-# スワップサイズを増やす
-sudo swapoff /swapfile
-sudo rm /swapfile
-sudo fallocate -l 8G /swapfile
+# Gitからクローン（または手動でファイル転送）
+git clone https://github.com/YOUR_USERNAME/yuutai-investment-tool.git
+cd yuutai-investment-tool
+
+# または、ローカルからファイル転送の場合：
+# gcloud compute scp --recurse ./yuutai-investment-tool yuutai-app:~/ --zone=us-central1-a
+```
+
+### 本番用Docker Compose設定：
+
+```bash
+# docker-compose.prod.yml を使用
+cp docker-compose.prod.yml docker-compose.yml
+
+# 環境変数設定（必要に応じて）
+cat > .env << 'EOF'
+NODE_ENV=production
+PORT=3000
+EOF
+```
+
+### アプリケーション起動：
+
+```bash
+# Docker Composeでビルド・起動
+docker-compose up -d --build
+
+# ログ確認
+docker-compose logs -f
+
+# サービス状態確認
+docker-compose ps
+```
+
+## 6. 初期セットアップ実行
+
+```bash
+# アプリケーションコンテナ内でセットアップ実行
+docker-compose exec backend npm run setup
+```
+
+## 7. Nginxリバースプロキシ設定（オプション）
+
+### SSL証明書とリバースプロキシの設定：
+
+```bash
+# Nginxインストール
+sudo apt install -y nginx certbot python3-certbot-nginx
+
+# Nginx設定ファイル作成
+sudo tee /etc/nginx/sites-available/yuutai << 'EOF'
+server {
+    listen 80;
+    server_name YOUR_DOMAIN.com;  # 実際のドメインに変更
+
+    location / {
+        proxy_pass http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+EOF
+
+# サイト有効化
+sudo ln -s /etc/nginx/sites-available/yuutai /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl reload nginx
+
+# SSL証明書取得（ドメインが設定済みの場合）
+sudo certbot --nginx -d YOUR_DOMAIN.com
+```
+
+## 8. システム起動時の自動起動設定
+
+```bash
+# Docker自動起動設定
+sudo systemctl enable docker
+
+# Docker Composeサービスファイル作成
+sudo tee /etc/systemd/system/yuutai-app.service << 'EOF'
+[Unit]
+Description=Yuutai Investment Tool
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/USERNAME/yuutai-investment-tool
+ExecStart=/usr/local/bin/docker-compose up -d
+ExecStop=/usr/local/bin/docker-compose down
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# USERNAMEを実際のユーザー名に置換
+sudo sed -i "s/USERNAME/$USER/g" /etc/systemd/system/yuutai-app.service
+
+# サービス有効化
+sudo systemctl daemon-reload
+sudo systemctl enable yuutai-app.service
+```
+
+## 9. モニタリングと管理
+
+### ログ確認：
+```bash
+# アプリケーションログ
+docker-compose logs -f backend
+docker-compose logs -f frontend
+
+# システムログ
+sudo journalctl -f -u yuutai-app.service
+```
+
+### リソース監視：
+```bash
+# Dockerコンテナリソース使用量
+docker stats
+
+# システムリソース
+htop
+df -h
+free -h
+```
+
+### 定期的なメンテナンス：
+```bash
+# Docker不要イメージ削除
+docker system prune -f
+
+# ログローテーション設定
+sudo tee /etc/logrotate.d/docker-containers << 'EOF'
+/var/lib/docker/containers/*/*.log {
+    rotate 7
+    daily
+    compress
+    size=1M
+    missingok
+    delaycompress
+    copytruncate
+}
+EOF
+```
+
+## 10. アクセス方法
+
+アプリケーションには以下の方法でアクセス可能です：
+
+- **直接アクセス**: `http://EXTERNAL_IP:3000`
+- **Nginxプロキシ経由**: `http://YOUR_DOMAIN.com` (設定済みの場合)
+- **HTTPS**: `https://YOUR_DOMAIN.com` (SSL証明書設定済みの場合)
+
+### 外部IPアドレス確認：
+```bash
+gcloud compute instances describe yuutai-app --zone=us-central1-a --format='get(networkInterfaces[0].accessConfigs[0].natIP)'
+```
+
+## 11. トラブルシューティング
+
+### よくある問題と対処法：
+
+**メモリ不足エラー**:
+```bash
+# スワップファイル作成（無料枠では1GB RAMのため）
+sudo fallocate -l 1G /swapfile
 sudo chmod 600 /swapfile
 sudo mkswap /swapfile
 sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 ```
 
-### Puppeteer最適化
-
-`docker-compose.gce.yml`で以下の環境変数を調整：
-
-```yaml
-environment:
-  - PUPPETEER_ARGS=--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-usage,--disable-gpu,--no-zygote,--single-process
-```
-
-### スクレイピング間隔の調整
-
+**Docker権限エラー**:
 ```bash
-# .envファイルで設定（ミリ秒単位）
-SCRAPING_INTERVAL=43200000  # 12時間ごと
+sudo usermod -aG docker $USER
+# 再ログインが必要
 ```
 
-## 🔐 SSL証明書の設定
-
-### Let's Encryptを使用
-
+**ポートアクセス問題**:
 ```bash
-# ドメインを設定してSSL証明書を取得
-./setup-ssl.sh your-domain.com your-email@example.com
+# ファイアウォール確認
+sudo ufw status
+gcloud compute firewall-rules list
 ```
 
-### Cloud Load Balancerを使用（推奨）
+## 12. コスト最適化
 
-```bash
-# ロードバランサーの作成
-gcloud compute backend-services create yuutai-backend \
-  --protocol=HTTP \
-  --port-name=http \
-  --health-checks=yuutai-health-check \
-  --global
+無料枠を最大限活用するため：
 
-# SSL証明書の作成
-gcloud compute ssl-certificates create yuutai-cert \
-  --domains=your-domain.com \
-  --global
-```
+- インスタンスタイプ: `e2-micro` (無料枠対象)
+- リージョン: us-central1, us-west1, us-east1のいずれか
+- ストレージ: 30GB以下
+- 月間使用時間: 744時間以下
+- 定期的な不要リソース削除
 
-## 📊 モニタリング
+## セキュリティ考慮事項
 
-### Cloud Loggingの設定
+- デフォルトパスワードの変更
+- 不要なポートの閉鎖
+- 定期的なセキュリティアップデート
+- SSL証明書の使用
+- ファイアウォール設定の最小化
 
-```bash
-# ログの確認
-gcloud logging read "resource.type=gce_instance AND resource.labels.instance_id=yuutai-app" \
-  --limit=50 \
-  --project=$PROJECT_ID
-```
-
-### Cloud Monitoringダッシュボード
-
-1. GCPコンソールでMonitoringを開く
-2. カスタムダッシュボードを作成
-3. 以下のメトリクスを追加：
-   - CPU使用率
-   - メモリ使用率
-   - ディスクI/O
-   - ネットワークトラフィック
-
-## 🔄 メンテナンス
-
-### バックアップ
-
-```bash
-# データベースのバックアップ
-docker-compose -f docker-compose.gce.yml exec backend \
-  sqlite3 /app/backend/db/yuutai.db ".backup /app/backend/db/backup-$(date +%Y%m%d).db"
-
-# Cloud Storageへのアップロード
-gsutil cp /mnt/disks/yuutai-data/db/backup-*.db gs://your-backup-bucket/
-```
-
-### アップデート手順
-
-```bash
-# コードの更新
-git pull origin main
-
-# イメージの再ビルド
-docker-compose -f docker-compose.gce.yml build --no-cache
-
-# ローリングアップデート
-docker-compose -f docker-compose.gce.yml up -d
-```
-
-### スケジューリング
-
-Cloud Schedulerを使用した定期タスク：
-
-```bash
-# 毎日午前3時にスクレイパーを再起動
-gcloud scheduler jobs create http restart-scraper \
-  --schedule="0 3 * * *" \
-  --uri="https://compute.googleapis.com/compute/v1/projects/$PROJECT_ID/zones/$ZONE/instances/yuutai-app/reset" \
-  --http-method=POST \
-  --time-zone="Asia/Tokyo"
-```
-
-## 💰 コスト最適化
-
-### 推定月額コスト（東京リージョン）
-
-| リソース | スペック | 月額（USD） |
-|---------|---------|------------|
-| GCE (e2-medium) | 1 vCPU, 4GB RAM | ~$34 |
-| 永続ディスク | 20GB SSD | ~$3.4 |
-| 静的IP | 1個 | ~$3 |
-| ネットワーク | 10GB/月 | ~$1 |
-| **合計** | | **~$41.4** |
-
-### コスト削減のヒント
-
-1. **プリエンプティブインスタンス**: 最大80%削減（ただし24時間で強制終了）
-2. **Committed Use Discounts**: 1年/3年契約で最大57%削減
-3. **夜間停止**: Cloud Schedulerで営業時間外は停止
-4. **リージョン選択**: us-central1が最も安い
-
-## 🚨 トラブルシューティング
-
-### よくある問題
-
-#### 1. Puppeteerが動作しない
-
-```bash
-# 依存関係の確認
-docker-compose -f docker-compose.gce.yml exec scraper \
-  ldd /usr/local/lib/node_modules/puppeteer/.local-chromium/linux-*/chrome-linux/chrome
-
-# 不足しているライブラリをインストール
-docker-compose -f docker-compose.gce.yml exec scraper \
-  apt-get update && apt-get install -y missing-library
-```
-
-#### 2. メモリ不足
-
-```bash
-# メモリ使用状況の確認
-docker stats
-
-# コンテナのメモリ制限を増やす
-# docker-compose.gce.ymlのdeploy.resources.limitsを編集
-```
-
-#### 3. ディスク容量不足
-
-```bash
-# ディスク使用状況
-df -h
-
-# Dockerの不要なデータを削除
-docker system prune -a --volumes
-```
-
-## 📞 サポート
-
-問題が解決しない場合は、以下の情報と共に報告してください：
-
-```bash
-# システム情報の収集
-docker-compose -f docker-compose.gce.yml logs --tail=100 > logs.txt
-docker version >> logs.txt
-uname -a >> logs.txt
-df -h >> logs.txt
-free -h >> logs.txt
-```
+この手順により、GCE無料枠でコスト効率的に優待投資ツールを運用できます。

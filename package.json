@@ -6,15 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview",
     "server": "node backend/server.js",
-    "setup": "node backend/setup.js --reset",
-    "setup:industry": "node backend/setup.js --reset --industry",
-    "setup:limit": "node backend/setup.js --reset --limit",
-    "scrape": "node backend/scraper.js",
-    "test": "node backend/test.js",
-    "db:init": "node backend/db-reset.js",
-    "db:status": "node backend/db-reset.js --status"
+    "setup": "node backend/setup.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

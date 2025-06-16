@@ -61,7 +61,7 @@
         <div class="rsi-status">{getRSIStatus(safeStock.rsi14)}</div>
       </div>
       <div class="rsi-item">
-        <div class="rsi-label">RSI(中期)</div>
+        <div class="rsi-label">RSI(28)</div>
         <div class="rsi-value" style="color: {getRSIColor(safeStock.rsi28)}">
           {safeStock.rsi28 != null ? formatPercent(safeStock.rsi28) : '-'}
           {#if safeStock.rsi28Stats?.percentile != null}
@@ -103,10 +103,22 @@
               </span>
               <span class="benefit-month">{formatRightsMonths(benefit.rightsMonths || benefit.ex_rights_month || 3)}</span>
             </div>
-            <p class="benefit-description">{benefit.description || '詳細情報なし'}</p>
+            {#if benefit.benefit_content && benefit.benefit_content !== benefit.description}
+              <div class="benefit-content-section">
+                <h5 class="benefit-content-label">優待内容</h5>
+                <p class="benefit-content">{benefit.benefit_content}</p>
+              </div>
+            {/if}
+            <div class="benefit-description-section">
+              <h5 class="benefit-description-label">詳細条件</h5>
+              <p class="benefit-description">{benefit.description || '詳細情報なし'}</p>
+            </div>
             <div class="benefit-details">
               <span class="benefit-value">¥{formatPrice(benefit.monetary_value || 0)}相当</span>
               <span class="benefit-shares">{benefit.min_shares || 100}株以上</span>
+              {#if benefit.has_long_term_holding}
+                <span class="long-term-info">🆁 {benefit.long_term_months || 12}ヶ月以上</span>
+              {/if}
             </div>
           </div>
         {/each}
@@ -304,12 +316,45 @@
     color: #666;
   }
   
+  .benefit-content-section,
+  .benefit-description-section {
+    margin: 0.75rem 0;
+  }
+  
+  .benefit-content-label,
+  .benefit-description-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #666;
+    margin: 0 0 0.25rem 0;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  
+  .benefit-content {
+    font-size: 0.95rem;
+    color: #007bff;
+    font-weight: 600;
+    margin: 0;
+    line-height: 1.4;
+    word-break: break-word;
+  }
+  
   .benefit-description {
     font-size: 0.875rem;
     color: #333;
-    margin: 0.5rem 0;
+    margin: 0;
     line-height: 1.4;
     word-break: break-word;
+  }
+  
+  .long-term-info {
+    font-size: 0.75rem;
+    color: #6c757d;
+    background-color: #e9ecef;
+    padding: 0.125rem 0.375rem;
+    border-radius: 3px;
+    white-space: nowrap;
   }
   
   .benefit-details {

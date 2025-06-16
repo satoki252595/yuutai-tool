@@ -18,6 +18,7 @@ db.serialize(() => {
       sector TEXT,
       industry TEXT,
       rsi REAL,
+      rsi28 REAL,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
@@ -29,6 +30,7 @@ db.serialize(() => {
       stock_code TEXT NOT NULL,
       benefit_type TEXT NOT NULL,
       description TEXT NOT NULL,
+      benefit_content TEXT,
       monetary_value INTEGER DEFAULT 0,
       min_shares INTEGER NOT NULL,
       holder_type TEXT DEFAULT 'どちらでも',

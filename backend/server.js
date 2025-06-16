@@ -158,8 +158,8 @@ app.get('/api/stocks', cacheMiddleware, async (req, res) => {
         shareholderBenefits: benefits,
         annualDividend: stock.annual_dividend || 0,
         dataSource: stock.data_source || 'unknown',
-        rsi14: rsi.rsi14,
-        rsi28: rsi.rsi28,
+        rsi14: stock.rsi || rsi.rsi14,
+        rsi28: stock.rsi28 || rsi.rsi28,
         rsi14Stats: rsi.stats14,
         rsi28Stats: rsi.stats28
       };

@@ -29,14 +29,15 @@ export class Database {
     return new Promise((resolve, reject) => {
       const sql = `
         INSERT INTO shareholder_benefits 
-        (stock_code, benefit_type, description, monetary_value, min_shares, holder_type, ex_rights_month, 
+        (stock_code, benefit_type, description, benefit_content, monetary_value, min_shares, holder_type, ex_rights_month, 
          has_long_term_holding, long_term_months, long_term_value, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `;
       this.db.run(sql, [
         benefit.stock_code || benefit.stockCode,
         benefit.benefit_type || benefit.benefitType,
         benefit.description,
+        benefit.benefit_content || benefit.benefitContent || benefit.description,
         benefit.monetary_value || benefit.monetaryValue,
         benefit.min_shares || benefit.minShares,
         benefit.holder_type || benefit.holderType,
@@ -56,10 +57,10 @@ export class Database {
   insertPriceHistory(priceData) {
     return new Promise((resolve, reject) => {
       const sql = `
-        INSERT INTO price_history (stock_code, price, dividend_yield)
-        VALUES (?, ?, ?)
+        INSERT INTO price_history (stock_code, price, dividend_yield, annual_dividend)
+        VALUES (?, ?, ?, ?)
       `;
-      this.db.run(sql, [priceData.code, priceData.price, priceData.dividendYield], (err) => {
+      this.db.run(sql, [priceData.code, priceData.price, priceData.dividendYield, priceData.annualDividend || 0], (err) => {
         if (err) reject(err);
         else resolve();
       });
@@ -70,7 +71,21 @@ export class Database {
   getBenefitsByStockCode(stockCode) {
     return new Promise((resolve, reject) => {
       const sql = `
-        SELECT * FROM shareholder_benefits 
+        SELECT 
+          id,
+          stock_code,
+          benefit_type,
+          description,
+          benefit_content,
+          monetary_value,
+          min_shares,
+          holder_type,
+          ex_rights_month,
+          has_long_term_holding,
+          long_term_months,
+          long_term_value,
+          created_at
+        FROM shareholder_benefits 
         WHERE stock_code = ?
         ORDER BY ex_rights_month, min_shares
       `;
