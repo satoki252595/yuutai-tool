@@ -22,9 +22,9 @@ services:
       dockerfile: Dockerfile.backend
     ports:
       - "5001:5001"
-    volumes:
-      - ./backend/db:/app/backend/db
-      - ./backend/cache:/app/backend/cache
+    # volumes:
+      # - ./backend/db:/app/backend/db
+      # - ./backend/cache:/app/backend/cache
     environment:
       - NODE_ENV=production
       - PORT=5001

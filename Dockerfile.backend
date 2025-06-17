@@ -41,5 +41,5 @@ USER nodejs
 
 EXPOSE 5001
 
-# サーバー起動
-CMD ["node", "backend/server.js"]
+# データベース初期化とサーバー起動
+CMD ["sh", "-c", "node backend/db/init.js && node backend/server.js"]
