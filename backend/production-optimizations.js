@@ -31,11 +31,11 @@ export const PRODUCTION_CONFIG = {
   // API設定
   api: {
     // デフォルト制限値
-    defaultLimit: 20,    // より少ない件数
-    maxLimit: 50,        // 最大50件に制限
+    defaultLimit: 20,    // 20件制限
+    maxLimit: 20,        // 最大20件に制限（高速化）
     
     // タイムアウト設定
-    timeoutMs: 45000,    // 45秒タイムアウト
+    timeoutMs: 30000,    // 30秒タイムアウト（短縮）
     
     // 圧縮レベル
     compressionLevel: 9, // 最高圧縮

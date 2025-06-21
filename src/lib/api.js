@@ -21,10 +21,10 @@ const buildParams = (options) => {
 };
 
 export const searchStocks = (options = {}) => {
-  // ページネーション対応
+  // 20件制限でパフォーマンス最適化
   const defaultOptions = {
     page: 1,
-    limit: 50,
+    limit: 20,  // 開発・本番共に20件制限
     ...options
   };
   const query = buildParams(defaultOptions);

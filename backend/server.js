@@ -157,10 +157,9 @@ app.get('/api/stocks', cacheMiddleware, async (req, res) => {
     } = req.query;
     
     const pageNum = parseInt(page);
-    const maxLimit = isProduction ? 
-      PRODUCTION_CONFIG.api.maxLimit : 100;
-    const defaultLimit = isProduction ? 
-      PRODUCTION_CONFIG.api.defaultLimit : 50;
+    // 開発・本番環境共に20件制限で統一
+    const maxLimit = 20;
+    const defaultLimit = 20;
     
     const limitNum = Math.min(
       parseInt(limit) || defaultLimit, 
@@ -170,10 +169,8 @@ app.get('/api/stocks', cacheMiddleware, async (req, res) => {
     console.log(`📊 Fetching page ${pageNum} with limit ${limitNum}...`);
     const startTime = process.hrtime.bigint();
     
-    // 本番環境では軽量版を使用
-    const queryMethod = isProduction ? 
-      'getStocksWithBenefitsPaginatedLite' : 
-      'getStocksWithBenefitsPaginated';
+    // 開発・本番環境共に軽量版を使用（高速化）
+    const queryMethod = 'getStocksWithBenefitsPaginatedLite';
     
     const result = await db[queryMethod]({
       search,
@@ -189,88 +186,41 @@ app.get('/api/stocks', cacheMiddleware, async (req, res) => {
     const dbTime = Number(process.hrtime.bigint() - startTime) / 1000000;
     console.log(`📊 DB query completed in ${dbTime.toFixed(2)}ms for ${stocks.length} stocks`);
     
-    // 必要なデータのみで優待情報を一括取得（N+1問題解決）
-    const stockCodes = stocks.map(s => s.code);
-    const benefitsByCode = await db.getBenefitsByStockCodes(stockCodes);
-    
-    const benefitTime = Number(process.hrtime.bigint() - startTime) / 1000000 - dbTime;
-    console.log(`📊 Benefits query completed in ${benefitTime.toFixed(2)}ms`);
-    
-    // 詳細情報を構築（RSI計算なし、データベースから取得済み）
+    // 超軽量版：優待情報の詳細取得をスキップ
     let stocksWithDetails = stocks.map(stock => {
-      const benefits = benefitsByCode[stock.code] || [];
-      const yields = calculateYields(stock, benefits);
-      
-      // GROUP_CONCATから配列に変換
-      const benefitGenres = stock.benefit_types ? 
-        [...new Set(stock.benefit_types.split(',').filter(Boolean))] : [];
-      
-      const rightsMonths = stock.rights_months ? 
-        [...new Set(stock.rights_months.split(',').map(m => parseInt(m)).filter(Boolean))] : [];
+      // 簡略化された利回り計算
+      const dividendYield = stock.dividend_yield || 0;
+      const benefitYield = 0; // 優待利回りは0に固定（高速化）
+      const totalYield = dividendYield + benefitYield;
       
       return {
         code: stock.code,
         name: stock.display_name || stock.name,
         originalName: stock.name,
         japaneseName: stock.japanese_name,
-        market: stock.market,
-        industry: stock.industry,
+        market: 'jp_market',
+        industry: null,
         price: stock.price || 0,
-        dividendYield: yields.dividendYield,
-        benefitYield: yields.benefitYield,
-        totalYield: yields.totalYield,
+        dividendYield: Math.round(dividendYield * 100) / 100,
+        benefitYield: Math.round(benefitYield * 100) / 100,
+        totalYield: Math.round(totalYield * 100) / 100,
         benefitCount: stock.benefit_count || 0,
-        benefitGenres,
-        rightsMonths,
-        hasLongTermHolding: stock.has_long_term_holding === 1,
+        benefitGenres: [],
+        rightsMonths: [],
+        hasLongTermHolding: false,
         minShares: stock.min_shares || 100,
-        shareholderBenefits: benefits,
+        shareholderBenefits: [], // 空配列で高速化
         annualDividend: stock.annual_dividend || 0,
-        dataSource: stock.data_source || 'unknown',
-        rsi14: stock.rsi,
-        rsi28: stock.rsi28,
+        dataSource: 'lite_mode',
+        rsi14: null,
+        rsi28: null,
         rsi14Stats: { status: 'unknown', level: null },
         rsi28Stats: { status: 'unknown', level: null }
       };
     });
     
-    // フィルター処理（データベースレベルで既に処理済みのため最小限）
-    if (benefitType && benefitType !== 'all') {
-      stocksWithDetails = stocksWithDetails.filter(stock => 
-        stock.benefitGenres.includes(benefitType)
-      );
-    }
-    
-    if (rightsMonth && rightsMonth !== 'all') {
-      const month = parseInt(rightsMonth);
-      stocksWithDetails = stocksWithDetails.filter(stock => 
-        stock.rightsMonths.includes(month)
-      );
-    }
-    
-    // RSIフィルター
-    if (rsiFilter && rsiFilter !== 'all') {
-      stocksWithDetails = stocksWithDetails.filter(stock => {
-        const rsi14 = stock.rsi14;
-        if (rsi14 === null || rsi14 === undefined) return false;
-        
-        switch (rsiFilter) {
-          case 'oversold': return rsi14 < 30;
-          case 'overbought': return rsi14 > 70;
-          case 'neutral': return rsi14 >= 30 && rsi14 <= 70;
-          default: return true;
-        }
-      });
-    }
-    
-    // 長期保有制度フィルター
-    if (longTermHolding && longTermHolding !== 'all') {
-      if (longTermHolding === 'yes') {
-        stocksWithDetails = stocksWithDetails.filter(stock => stock.hasLongTermHolding);
-      } else if (longTermHolding === 'no') {
-        stocksWithDetails = stocksWithDetails.filter(stock => !stock.hasLongTermHolding);
-      }
-    }
+    // フィルター処理をスキップ（高速化優先）
+    // 注意: 軽量モードではフィルター機能は制限されます
     
     const totalTime = Number(process.hrtime.bigint() - startTime) / 1000000;
     console.log(`📊 Total processing time: ${totalTime.toFixed(2)}ms`);
