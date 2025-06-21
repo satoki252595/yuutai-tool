@@ -1,6 +1,7 @@
 import sqlite3 from 'sqlite3';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { PRODUCTION_CONFIG } from './production-optimizations.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -9,14 +10,24 @@ export class Database {
   constructor() {
     this.db = new sqlite3.Database(join(__dirname, 'db/yuutai.db'));
     
-    // パフォーマンス最適化設定
-    this.db.exec(`
-      PRAGMA journal_mode = WAL;
-      PRAGMA synchronous = NORMAL;
-      PRAGMA cache_size = -64000;  -- 64MB
-      PRAGMA temp_store = MEMORY;
-      PRAGMA mmap_size = 134217728;  -- 128MB
-    `);
+    // 本番環境向け最適化設定
+    const isProduction = process.env.NODE_ENV === 'production';
+    const pragmas = isProduction ? 
+      PRODUCTION_CONFIG.database.pragmas :
+      [
+        'PRAGMA journal_mode = WAL',
+        'PRAGMA synchronous = NORMAL',
+        'PRAGMA cache_size = -64000',  // 64MB
+        'PRAGMA temp_store = MEMORY',
+        'PRAGMA mmap_size = 134217728'  // 128MB
+      ];
+    
+    this.db.exec(pragmas.join('; '));
+    
+    // 接続プールの設定（本番環境）
+    if (isProduction) {
+      this.db.configure('busyTimeout', 30000); // 30秒のビジータイムアウト
+    }
   }
 
   // 株式情報の保存/更新
@@ -147,6 +158,76 @@ export class Database {
             benefitsByCode[row.stock_code].push(row);
           });
           resolve(benefitsByCode);
+        }
+      });
+    });
+  }
+
+  // 本番環境向け軽量版ページング対応株式一覧取得
+  getStocksWithBenefitsPaginatedLite(options = {}) {
+    const {
+      search = '',
+      sortBy = 'totalYield',
+      sortOrder = 'desc',
+      page = 1,
+      limit = 20
+    } = options;
+
+    return new Promise((resolve, reject) => {
+      const offset = (page - 1) * limit;
+      
+      // 軽量版：基本情報のみを高速取得
+      let sql = `
+        SELECT 
+          s.code,
+          s.name,
+          COALESCE(s.japanese_name, s.name) as display_name,
+          lp.price,
+          lp.dividend_yield,
+          lp.annual_dividend,
+          COUNT(DISTINCT sb.id) as benefit_count,
+          SUM(sb.monetary_value) as total_benefit_value,
+          MIN(sb.min_shares) as min_shares
+        FROM stocks s
+        LEFT JOIN shareholder_benefits sb ON s.code = sb.stock_code
+        LEFT JOIN latest_prices lp ON s.code = lp.stock_code
+      `;
+
+      const params = [];
+      let whereClause = '';
+      
+      if (search) {
+        whereClause = ` WHERE s.code LIKE ? OR s.name LIKE ? OR s.japanese_name LIKE ?`;
+        const searchParam = `%${search}%`;
+        params.push(searchParam, searchParam, searchParam);
+      }
+
+      sql += whereClause;
+      sql += ` GROUP BY s.code`;
+
+      // 簡単なソート（パフォーマンス優先）
+      if (sortBy === 'code') {
+        sql += ` ORDER BY s.code ${sortOrder}`;
+      } else {
+        sql += ` ORDER BY total_benefit_value ${sortOrder}`;
+      }
+
+      sql += ` LIMIT ? OFFSET ?`;
+      params.push(limit, offset);
+
+      this.db.all(sql, params, (err, rows) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve({
+            stocks: rows || [],
+            pagination: {
+              page: parseInt(page),
+              limit: parseInt(limit),
+              total: rows.length, // 概算値
+              totalPages: Math.ceil(rows.length / limit)
+            }
+          });
         }
       });
     });

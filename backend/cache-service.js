@@ -1,20 +1,32 @@
 // 軽量インメモリキャッシュサービス（Redis代替）
 import { LRUCache } from 'lru-cache';
+import { PRODUCTION_CONFIG } from './production-optimizations.js';
 
 class CacheService {
   constructor() {
-    // LRUキャッシュの設定
+    const isProduction = process.env.NODE_ENV === 'production';
+    const config = isProduction ? PRODUCTION_CONFIG.cache : {
+      maxItems: 500,
+      maxSize: 50 * 1024 * 1024,
+      stocksListTTL: 5 * 60 * 1000,
+      benefitTypesTTL: 15 * 60 * 1000,
+      rightsMonthsTTL: 15 * 60 * 1000,
+      individualStockTTL: 3 * 60 * 1000
+    };
+    
+    // LRU Cache の設定（本番環境最適化）
     this.cache = new LRUCache({
-      max: 500, // 最大500アイテム
-      ttl: 5 * 60 * 1000, // 5分間のTTL
-      maxSize: 50 * 1024 * 1024, // 最大50MBまで
+      max: config.maxItems,
+      ttl: config.stocksListTTL,      // デフォルトTTL
+      maxSize: config.maxSize,
       sizeCalculation: (value) => {
-        // オブジェクトのサイズを推定
         return JSON.stringify(value).length;
       },
       updateAgeOnGet: true,
       updateAgeOnHas: true,
     });
+    
+    this.config = config;
     
     // ヒット率の統計
     this.stats = {

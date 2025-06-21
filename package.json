@@ -7,10 +7,13 @@
     "dev": "vite",
     "build": "vite build",
     "server": "node backend/server.js",
+    "server:prod": "NODE_ENV=production node backend/server.js",
     "setup": "node backend/setup.js",
     "setup:skip-no-benefits": "node backend/setup.js --skip-no-benefits",
+    "setup:prod": "NODE_ENV=production node backend/setup.js --skip-no-benefits",
     "db:optimize": "node backend/optimize-database.js",
-    "db:test": "node backend/performance-test.js"
+    "db:test": "node backend/performance-test.js",
+    "benchmark": "node backend/benchmark-api.js"
   },
   "dependencies": {
     "compression": "^1.8.0",

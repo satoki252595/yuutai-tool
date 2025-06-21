@@ -71,13 +71,39 @@ docker-compose -f docker-compose.prod.yml up
 ### 本番環境（非Docker）
 
 ```bash
-# ビルド
-npm run build
+# 高速デプロイメント（推奨）
+./production-deploy.sh
 
-# 本番サーバー起動
-NODE_ENV=production npm run server
+# または手動デプロイ
+npm ci --omit=dev
+npm run build
+npm run setup:prod
+NODE_ENV=production npm run server:prod
 
 # Nginxを使用する場合は nginx.conf または nginx.prod.conf を参照
+```
+
+#### 本番環境最適化機能
+
+**🚀 GCE無料枠向け高速化:**
+- データベース最適化（256MB mmap、128MB cache）
+- 軽量クエリ（必要最小限のデータのみ取得）
+- 強化されたキャッシュ（10分TTL、100MBまで）
+- 最大圧縮レベル（gzip level 9）
+- リクエストタイムアウト（45秒）
+
+**📊 パフォーマンス設定:**
+- デフォルト件数: 20件/ページ（開発環境: 50件）
+- 最大件数: 50件/ページ（開発環境: 100件）
+- キャッシュ有効期限: 10分（開発環境: 5分）
+
+**🔍 モニタリング:**
+```bash
+# ヘルスチェック
+curl http://localhost:5001/api/health
+
+# パフォーマンステスト
+npm run benchmark
 ```
 
 ## 📋 コマンド一覧

@@ -5,25 +5,58 @@ import { Database } from './database.js';
 import { YahooFinanceService } from './yahooFinance.js';
 import { RSICalculator } from './rsiCalculator.js';
 import { cacheService } from './cache-service.js';
+import { PRODUCTION_CONFIG } from './production-optimizations.js';
 
 const app = express();
 const PORT = process.env.PORT || 5001;
+const isProduction = process.env.NODE_ENV === 'production';
 
-app.use(cors());
-app.use(express.json());
+// CORS設定
+app.use(cors({
+  origin: isProduction ? [
+    'https://34.170.150.67',
+    'http://34.170.150.67', 
+    'https://yuutai-tool.com',
+    'http://yuutai-tool.com'
+  ] : true,
+  credentials: true
+}));
 
-// gzip圧縮の追加
-app.use(compression({
-  level: 6, // 圧縮レベル（1-9、デフォルト6）
-  threshold: 1024, // 1KB以上のレスポンスを圧縮
+app.use(express.json({ limit: '10mb' }));
+
+// 本番環境向け圧縮設定
+const compressionConfig = isProduction ? {
+  level: PRODUCTION_CONFIG.api.compressionLevel,
+  threshold: PRODUCTION_CONFIG.api.compressionThreshold,
   filter: (req, res) => {
-    // 圧縮するMIMEタイプを指定
-    if (req.headers['x-no-compression']) {
-      return false;
-    }
+    if (req.headers['x-no-compression']) return false;
     return compression.filter(req, res);
   }
-}));
+} : {
+  level: 6,
+  threshold: 1024,
+  filter: (req, res) => {
+    if (req.headers['x-no-compression']) return false;
+    return compression.filter(req, res);
+  }
+};
+
+app.use(compression(compressionConfig));
+
+// リクエストタイムアウト設定
+app.use((req, res, next) => {
+  const timeout = isProduction ? 
+    PRODUCTION_CONFIG.api.timeoutMs : 
+    120000; // 開発環境は2分
+    
+  res.setTimeout(timeout, () => {
+    res.status(504).json({ 
+      error: 'Request timeout',
+      message: `Request took longer than ${timeout}ms`
+    });
+  });
+  next();
+});
 
 const db = new Database();
 const yahooFinance = new YahooFinanceService();
@@ -124,13 +157,25 @@ app.get('/api/stocks', cacheMiddleware, async (req, res) => {
     } = req.query;
     
     const pageNum = parseInt(page);
-    const limitNum = Math.min(parseInt(limit), 100); // 最大100件まで
+    const maxLimit = isProduction ? 
+      PRODUCTION_CONFIG.api.maxLimit : 100;
+    const defaultLimit = isProduction ? 
+      PRODUCTION_CONFIG.api.defaultLimit : 50;
+    
+    const limitNum = Math.min(
+      parseInt(limit) || defaultLimit, 
+      maxLimit
+    );
     
     console.log(`📊 Fetching page ${pageNum} with limit ${limitNum}...`);
     const startTime = process.hrtime.bigint();
     
-    // 高速化されたページング対応クエリを使用
-    const result = await db.getStocksWithBenefitsPaginated({
+    // 本番環境では軽量版を使用
+    const queryMethod = isProduction ? 
+      'getStocksWithBenefitsPaginatedLite' : 
+      'getStocksWithBenefitsPaginated';
+    
+    const result = await db[queryMethod]({
       search,
       sortBy,
       sortOrder,
@@ -352,39 +397,62 @@ app.get('/api/rights-months', async (req, res) => {
   }
 });
 
-// ヘルスチェック
+// 本番環境対応ヘルスチェックエンドポイント
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
-
-// キャッシュクリアエンドポイント
-app.post('/api/cache/clear', (req, res) => {
-  stockCache.clear();
-  console.log('🧽 キャッシュをクリアしました');
-  res.json({ message: 'キャッシュをクリアしました' });
-});
-
-// ヘルスチェックエンドポイント
-app.get('/api/health', (req, res) => {
+  const startTime = process.hrtime.bigint();
+  
   const healthStatus = {
     status: 'healthy',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    memory: process.memoryUsage(),
-    database: 'connected',
-    version: '2.2.0'
+    environment: isProduction ? 'production' : 'development',
+    version: '2.3.0',
+    cache: cacheService.getStats()
   };
   
-  // データベース接続確認
-  db.db.get('SELECT COUNT(*) as count FROM stocks', [], (err) => {
+  // 本番環境では詳細情報を制限
+  if (!isProduction) {
+    healthStatus.memory = process.memoryUsage();
+  }
+  
+  // データベース接続確認（タイムアウト付き）
+  const timeout = setTimeout(() => {
+    healthStatus.database = 'timeout';
+    healthStatus.status = 'unhealthy';
+    res.status(503).json(healthStatus);
+  }, 5000);
+  
+  db.db.get('SELECT COUNT(*) as count FROM stocks LIMIT 1', [], (err, row) => {
+    clearTimeout(timeout);
+    
+    const endTime = process.hrtime.bigint();
+    const responseTime = Number(endTime - startTime) / 1000000;
+    
     if (err) {
       healthStatus.database = 'error';
       healthStatus.status = 'unhealthy';
+      healthStatus.error = isProduction ? 'Database connection failed' : err.message;
       res.status(503).json(healthStatus);
     } else {
+      healthStatus.database = 'connected';
+      healthStatus.responseTime = `${responseTime.toFixed(2)}ms`;
+      healthStatus.stockCount = row.count;
       res.json(healthStatus);
     }
   });
+});
+
+// キャッシュクリアエンドポイント（本番環境では制限）
+app.post('/api/cache/clear', (req, res) => {
+  if (isProduction) {
+    // 本番環境では特定のパターンのみクリア
+    const pattern = req.body.pattern || 'stocks';
+    const deleted = cacheService.deletePattern(pattern);
+    res.json({ message: `Cleared ${deleted} cache entries matching: ${pattern}` });
+  } else {
+    cacheService.clear();
+    res.json({ message: 'All cache cleared' });
+  }
 });
 
 app.listen(PORT, () => {
