@@ -18,6 +18,7 @@ export class ShareholderBenefitScraper {
     this.delayBetweenRequests = 800;
     this.batchSize = 50;
     this.restartInterval = 200;
+    this.skipNoBenefits = options.skipNoBenefits || false; // 優待なし銘柄をスキップするオプション
   }
 
   async scrapeStocks(stockCodes) {
@@ -70,11 +71,12 @@ export class ShareholderBenefitScraper {
     try {
       const results = await this.processInParallel(batch, progress);
       
-      const successful = results.filter(r => r.success).length;
+      const successful = results.filter(r => r.success && !r.skipped).length;
       const failed = results.filter(r => !r.success && !r.noData).length;
       const noData = results.filter(r => r.noData).length;
+      const skipped = results.filter(r => r.skipped).length;
       
-      console.log(`  バッチ結果: 成功${successful}件, データなし${noData}件, エラー${failed}件`);
+      console.log(`  バッチ結果: 成功${successful}件, データなし${noData}件, スキップ${skipped}件, エラー${failed}件`);
       
     } finally {
       await this.closeBrowsers();
@@ -232,6 +234,20 @@ export class ShareholderBenefitScraper {
       }
       if (stockInfo.name === stockCode && scrapingResult.companyName) {
         stockInfo.name = scrapingResult.companyName;
+      }
+
+      // 優待なし銘柄をスキップするオプションが有効で、優待情報が0件の場合
+      if (this.skipNoBenefits && benefits.length === 0) {
+        console.log(`    📭 ${stockCode}: 優待情報なし（スキップ）`);
+        browser.processed++;
+        return {
+          success: true,
+          code: stockCode,
+          name: stockInfo.name,
+          benefitCount: 0,
+          browserId,
+          skipped: true
+        };
       }
 
       // データベース操作

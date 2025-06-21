@@ -7,11 +7,16 @@
     "dev": "vite",
     "build": "vite build",
     "server": "node backend/server.js",
-    "setup": "node backend/setup.js"
+    "setup": "node backend/setup.js",
+    "setup:skip-no-benefits": "node backend/setup.js --skip-no-benefits",
+    "db:optimize": "node backend/optimize-database.js",
+    "db:test": "node backend/performance-test.js"
   },
   "dependencies": {
+    "compression": "^1.8.0",
     "cors": "^2.8.5",
     "express": "^4.19.2",
+    "lru-cache": "^11.1.0",
     "node-fetch": "^3.3.2",
     "puppeteer": "^22.12.1",
     "sqlite3": "^5.1.7",

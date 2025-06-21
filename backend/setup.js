@@ -29,7 +29,18 @@ class Setup {
       console.log('⚡ 4並列でスクレイピング実行中...\n');
 
       const codes = stocks.map(s => s.code);
-      const scraper = new ShareholderBenefitScraper({ concurrency: 4 });
+      
+      // 環境変数またはコマンドライン引数から優待なしスキップオプションを取得
+      const skipNoBenefits = process.env.SKIP_NO_BENEFITS === 'true' || process.argv.includes('--skip-no-benefits');
+      
+      if (skipNoBenefits) {
+        console.log('📭 優待なし銘柄はDBに格納しません');
+      }
+      
+      const scraper = new ShareholderBenefitScraper({ 
+        concurrency: 4,
+        skipNoBenefits: skipNoBenefits
+      });
       await scraper.scrapeStocks(codes);
 
       // 統計情報表示
@@ -41,6 +52,9 @@ class Setup {
       console.log(`  RSI(14)計算済: ${rsiStats.rsi14Count}銘柄`);
       console.log(`  RSI(28)計算済: ${rsiStats.rsi28Count}銘柄`);
       console.log(`  価格履歴平均: ${rsiStats.avgPriceHistory}日分`);
+
+      console.log('\n🔧 データベース最適化実行中...');
+      await this.optimizeDatabase();
 
       console.log('\n✅ セットアップ完了');
       await this.showDetailedStats();
@@ -75,6 +89,53 @@ class Setup {
       if (error.stdout && !error.stdout.toString().includes('既に存在')) {
         console.error('マイグレーションエラー:', error.message);
       }
+    }
+  }
+
+  async optimizeDatabase() {
+    try {
+      console.log('🚀 データベース最適化を開始...');
+      
+      // 最適化実行
+      const optimizePath = path.join(__dirname, 'optimize-database.js');
+      execSync(`node ${optimizePath}`, { stdio: 'pipe' });
+      
+      // パフォーマンステスト実行
+      console.log('\n🧪 パフォーマンステスト実行中...');
+      const perfTestPath = path.join(__dirname, 'performance-test.js');
+      const perfResult = execSync(`node ${perfTestPath}`, { stdio: 'pipe', encoding: 'utf8' });
+      
+      // 重要な結果のみ表示
+      const lines = perfResult.split('\n');
+      const importantLines = lines.filter(line => 
+        line.includes('複雑結合クエリ（最適化前）') || 
+        line.includes('最適化済み結合クエリ') ||
+        line.includes('データベースサイズ') ||
+        line.includes('インデックス数確認')
+      );
+      
+      console.log('📊 最適化結果:');
+      importantLines.forEach(line => {
+        if (line.trim()) {
+          console.log(`  ${line.trim()}`);
+        }
+      });
+      
+      // 高速化率を計算
+      const beforeMatch = perfResult.match(/複雑結合クエリ（最適化前）: \d+件 \((\d+\.?\d*)ms\)/);
+      const afterMatch = perfResult.match(/最適化済み結合クエリ: \d+件 \((\d+\.?\d*)ms\)/);
+      
+      if (beforeMatch && afterMatch) {
+        const beforeMs = parseFloat(beforeMatch[1]);
+        const afterMs = parseFloat(afterMatch[1]);
+        const speedup = (beforeMs / afterMs).toFixed(1);
+        console.log(`  ⚡ パフォーマンス向上: ${speedup}倍高速化`);
+      }
+      
+      console.log('✅ データベース最適化完了');
+    } catch (error) {
+      console.error('データベース最適化エラー:', error.message);
+      // 最適化エラーは致命的ではないため処理を継続
     }
   }
 

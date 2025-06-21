@@ -1,8 +1,10 @@
 import express from 'express';
 import cors from 'cors';
+import compression from 'compression';
 import { Database } from './database.js';
 import { YahooFinanceService } from './yahooFinance.js';
 import { RSICalculator } from './rsiCalculator.js';
+import { cacheService } from './cache-service.js';
 
 const app = express();
 const PORT = process.env.PORT || 5001;
@@ -10,32 +12,36 @@ const PORT = process.env.PORT || 5001;
 app.use(cors());
 app.use(express.json());
 
+// gzip圧縮の追加
+app.use(compression({
+  level: 6, // 圧縮レベル（1-9、デフォルト6）
+  threshold: 1024, // 1KB以上のレスポンスを圧縮
+  filter: (req, res) => {
+    // 圧縮するMIMEタイプを指定
+    if (req.headers['x-no-compression']) {
+      return false;
+    }
+    return compression.filter(req, res);
+  }
+}));
+
 const db = new Database();
 const yahooFinance = new YahooFinanceService();
 const rsiCalculator = new RSICalculator();
 
-// メモリキャッシュの実装
-const stockCache = new Map();
-const CACHE_TTL = 5 * 60 * 1000; // 5分間のキャッシュ
-
-// キャッシュミドルウェア
+// 改良されたキャッシュミドルウェア
 const cacheMiddleware = (req, res, next) => {
   const key = req.originalUrl;
-  const cached = stockCache.get(key);
+  const cached = cacheService.get(key);
   
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-    console.log(`📦 キャッシュヒット: ${key}`);
-    return res.json(cached.data);
+  if (cached) {
+    return res.json(cached);
   }
   
   // オリジナルのjson関数を保存
   const originalJson = res.json;
   res.json = function(data) {
-    stockCache.set(key, {
-      data,
-      timestamp: Date.now()
-    });
-    console.log(`💾 キャッシュ保存: ${key}`);
+    cacheService.set(key, data);
     originalJson.call(this, data);
   };
   
@@ -102,7 +108,7 @@ function calculateYields(stock, benefits) {
   };
 }
 
-// 株式一覧取得（キャッシュ機能付き）
+// 株式一覧取得（高速化 + キャッシュ機能付き）
 app.get('/api/stocks', cacheMiddleware, async (req, res) => {
   try {
     const { 
@@ -112,32 +118,50 @@ app.get('/api/stocks', cacheMiddleware, async (req, res) => {
       benefitType,
       rightsMonth,
       rsiFilter,
-      longTermHolding
+      longTermHolding,
+      page = 1,
+      limit = 50
     } = req.query;
     
-    const stocks = await db.getStocksWithBenefits(search);
+    const pageNum = parseInt(page);
+    const limitNum = Math.min(parseInt(limit), 100); // 最大100件まで
     
-    // 各銘柄の詳細情報を取得
+    console.log(`📊 Fetching page ${pageNum} with limit ${limitNum}...`);
+    const startTime = process.hrtime.bigint();
+    
+    // 高速化されたページング対応クエリを使用
+    const result = await db.getStocksWithBenefitsPaginated({
+      search,
+      sortBy,
+      sortOrder,
+      page: pageNum,
+      limit: limitNum
+    });
+    
+    const stocks = result.stocks;
+    const pagination = result.pagination;
+    
+    const dbTime = Number(process.hrtime.bigint() - startTime) / 1000000;
+    console.log(`📊 DB query completed in ${dbTime.toFixed(2)}ms for ${stocks.length} stocks`);
+    
+    // 必要なデータのみで優待情報を一括取得（N+1問題解決）
     const stockCodes = stocks.map(s => s.code);
-    console.log(`Calculating RSI for ${stockCodes.length} stocks...`);
-    const rsiData = await rsiCalculator.calculateMultipleRSI(stockCodes);
-    console.log(`RSI calculation complete. Sample:`, Object.keys(rsiData).slice(0, 3).map(code => ({ code, rsi14: rsiData[code]?.rsi14 })));
+    const benefitsByCode = await db.getBenefitsByStockCodes(stockCodes);
     
-    let stocksWithDetails = await Promise.all(stocks.map(async (stock) => {
-      const benefits = await db.getBenefitsByStockCode(stock.code);
+    const benefitTime = Number(process.hrtime.bigint() - startTime) / 1000000 - dbTime;
+    console.log(`📊 Benefits query completed in ${benefitTime.toFixed(2)}ms`);
+    
+    // 詳細情報を構築（RSI計算なし、データベースから取得済み）
+    let stocksWithDetails = stocks.map(stock => {
+      const benefits = benefitsByCode[stock.code] || [];
       const yields = calculateYields(stock, benefits);
       
-      // 優待ジャンルを分類
-      const benefitGenres = [...new Set(benefits.map(b => b.benefit_type).filter(Boolean))];
+      // GROUP_CONCATから配列に変換
+      const benefitGenres = stock.benefit_types ? 
+        [...new Set(stock.benefit_types.split(',').filter(Boolean))] : [];
       
-      // 権利月を取得
-      const rightsMonths = [...new Set(benefits.map(b => b.ex_rights_month).filter(Boolean))];
-      
-      // 長期保有制度の有無
-      const hasLongTermHolding = benefits.some(b => b.has_long_term_holding === 1);
-      
-      // RSIデータ
-      const rsi = rsiData[stock.code] || { rsi14: null, rsi28: null, stats14: null, stats28: null };
+      const rightsMonths = stock.rights_months ? 
+        [...new Set(stock.rights_months.split(',').map(m => parseInt(m)).filter(Boolean))] : [];
       
       return {
         code: stock.code,
@@ -150,22 +174,22 @@ app.get('/api/stocks', cacheMiddleware, async (req, res) => {
         dividendYield: yields.dividendYield,
         benefitYield: yields.benefitYield,
         totalYield: yields.totalYield,
-        benefitCount: benefits.length,
+        benefitCount: stock.benefit_count || 0,
         benefitGenres,
         rightsMonths,
-        hasLongTermHolding,
-        minShares: benefits.length > 0 ? Math.min(...benefits.map(b => b.min_shares || 100)) : 100,
+        hasLongTermHolding: stock.has_long_term_holding === 1,
+        minShares: stock.min_shares || 100,
         shareholderBenefits: benefits,
         annualDividend: stock.annual_dividend || 0,
         dataSource: stock.data_source || 'unknown',
-        rsi14: stock.rsi || rsi.rsi14,
-        rsi28: stock.rsi28 || rsi.rsi28,
-        rsi14Stats: rsi.stats14,
-        rsi28Stats: rsi.stats28
+        rsi14: stock.rsi,
+        rsi28: stock.rsi28,
+        rsi14Stats: { status: 'unknown', level: null },
+        rsi28Stats: { status: 'unknown', level: null }
       };
-    }));
+    });
     
-    // フィルター処理
+    // フィルター処理（データベースレベルで既に処理済みのため最小限）
     if (benefitType && benefitType !== 'all') {
       stocksWithDetails = stocksWithDetails.filter(stock => 
         stock.benefitGenres.includes(benefitType)
@@ -186,14 +210,10 @@ app.get('/api/stocks', cacheMiddleware, async (req, res) => {
         if (rsi14 === null || rsi14 === undefined) return false;
         
         switch (rsiFilter) {
-          case 'oversold': // 売られすぎ（RSI < 30）
-            return rsi14 < 30;
-          case 'overbought': // 買われすぎ（RSI > 70）
-            return rsi14 > 70;
-          case 'neutral': // 適正（30 <= RSI <= 70）
-            return rsi14 >= 30 && rsi14 <= 70;
-          default:
-            return true;
+          case 'oversold': return rsi14 < 30;
+          case 'overbought': return rsi14 > 70;
+          case 'neutral': return rsi14 >= 30 && rsi14 <= 70;
+          default: return true;
         }
       });
     }
@@ -207,56 +227,14 @@ app.get('/api/stocks', cacheMiddleware, async (req, res) => {
       }
     }
     
-    // ソート処理
-    stocksWithDetails.sort((a, b) => {
-      let aValue, bValue;
-      
-      switch (sortBy) {
-        case 'dividendYield':
-          aValue = a.dividendYield;
-          bValue = b.dividendYield;
-          break;
-        case 'benefitYield':
-          aValue = a.benefitYield;
-          bValue = b.benefitYield;
-          break;
-        case 'totalYield':
-          aValue = a.totalYield;
-          bValue = b.totalYield;
-          break;
-        case 'price':
-          aValue = a.price;
-          bValue = b.price;
-          break;
-        case 'name':
-          aValue = a.name;
-          bValue = b.name;
-          break;
-        case 'code':
-          aValue = a.code;
-          bValue = b.code;
-          break;
-        case 'rsi14':
-          aValue = a.rsi14 !== null ? a.rsi14 : (sortOrder === 'asc' ? 100 : -1);
-          bValue = b.rsi14 !== null ? b.rsi14 : (sortOrder === 'asc' ? 100 : -1);
-          break;
-        case 'rsi28':
-          aValue = a.rsi28 !== null ? a.rsi28 : (sortOrder === 'asc' ? 100 : -1);
-          bValue = b.rsi28 !== null ? b.rsi28 : (sortOrder === 'asc' ? 100 : -1);
-          break;
-        default:
-          aValue = a.totalYield;
-          bValue = b.totalYield;
-      }
-      
-      if (typeof aValue === 'string') {
-        return sortOrder === 'asc' ? aValue.localeCompare(bValue) : bValue.localeCompare(aValue);
-      } else {
-        return sortOrder === 'asc' ? aValue - bValue : bValue - aValue;
-      }
-    });
+    const totalTime = Number(process.hrtime.bigint() - startTime) / 1000000;
+    console.log(`📊 Total processing time: ${totalTime.toFixed(2)}ms`);
     
-    res.json(stocksWithDetails);
+    // レスポンス（ページングは既にDBレベルで処理済み）
+    res.json({
+      stocks: stocksWithDetails,
+      pagination
+    });
   } catch (error) {
     console.error('Error fetching stocks:', error);
     res.status(500).json({ error: 'Internal server error' });

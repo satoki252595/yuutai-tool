@@ -1,4 +1,4 @@
-const API_BASE = 'http://localhost:5001/api';
+const API_BASE = '/api'; // 相対パスに変更して本番環境対応
 
 // APIリクエストの共通処理（コード圧縮）
 const apiRequest = async (endpoint, options = {}) => {
@@ -21,7 +21,13 @@ const buildParams = (options) => {
 };
 
 export const searchStocks = (options = {}) => {
-  const query = buildParams(options);
+  // ページネーション対応
+  const defaultOptions = {
+    page: 1,
+    limit: 50,
+    ...options
+  };
+  const query = buildParams(defaultOptions);
   return apiRequest(`/stocks${query ? `?${query}` : ''}`);
 };
 

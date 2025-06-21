@@ -12,14 +12,20 @@
   let filters = { ...INITIAL_FILTERS };
   let showRSI = true;
   
+  // ページネーション
+  let currentPage = 1;
+  let totalPages = 1;
+  let totalCount = 0;
+  let pageSize = 50;
+  
   // 選択肢リスト
   let benefitTypes = [];
   let rightsMonths = [];
   
   // 統計情報（算出値）
-  $: totalStocks = stocks.length;
-  $: averageYield = totalStocks > 0 
-    ? Math.round(stocks.reduce((sum, s) => sum + (s.totalYield || 0), 0) / totalStocks * 100) / 100
+  $: displayedStocks = stocks.length;
+  $: averageYield = displayedStocks > 0 
+    ? Math.round(stocks.reduce((sum, s) => sum + (s.totalYield || 0), 0) / displayedStocks * 100) / 100
     : 0;
 
   async function loadStocks() {
@@ -27,13 +33,36 @@
     error = null;
     
     try {
-      stocks = await searchStocks({ search: searchQuery, ...filters });
+      const response = await searchStocks({ 
+        search: searchQuery, 
+        ...filters,
+        page: currentPage,
+        limit: pageSize
+      });
+      
+      // ページネーション対応
+      if (response.stocks) {
+        stocks = response.stocks;
+        totalCount = response.pagination.total;
+        totalPages = response.pagination.totalPages;
+        currentPage = response.pagination.page;
+      } else {
+        // 互換性のため（古いAPIレスポンス）
+        stocks = response;
+      }
     } catch (err) {
       error = '株式情報の取得に失敗しました。サーバーが起動していることを確認してください。';
       console.error('Error loading stocks:', err);
     } finally {
       loading = false;
     }
+  }
+  
+  // ページ変更
+  async function changePage(page) {
+    if (page < 1 || page > totalPages) return;
+    currentPage = page;
+    await loadStocks();
   }
 
   async function loadFilterOptions() {
@@ -166,7 +195,7 @@
   {#if !loading && !error && stocks.length > 0}
     <section class="stats-section">
       <div class="stat-card">
-        <div class="stat-value">{totalStocks}</div>
+        <div class="stat-value">{displayedStocks} / {totalCount}</div>
         <div class="stat-label">表示銘柄数</div>
       </div>
       <div class="stat-card">
@@ -192,5 +221,50 @@
         <StockCard {stock} {showRSI} on:updatePrice={handleUpdatePrice} />
       {/each}
     </section>
+    
+    {#if totalPages > 1}
+      <section class="pagination">
+        <button 
+          class="btn btn-secondary" 
+          on:click={() => changePage(currentPage - 1)}
+          disabled={currentPage === 1}
+        >
+          ← 前へ
+        </button>
+        
+        <span class="page-info">
+          ページ {currentPage} / {totalPages}
+        </span>
+        
+        <button 
+          class="btn btn-secondary" 
+          on:click={() => changePage(currentPage + 1)}
+          disabled={currentPage === totalPages}
+        >
+          次へ →
+        </button>
+      </section>
+    {/if}
   {/if}
 </main>
+
+<style>
+  .pagination {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 1rem;
+    margin: 2rem 0;
+    padding: 1rem;
+  }
+  
+  .page-info {
+    font-weight: 500;
+    color: var(--text-secondary);
+  }
+  
+  .pagination button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+</style>
