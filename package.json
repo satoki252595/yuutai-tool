@@ -11,8 +11,9 @@
     "setup": "node backend/setup.js",
     "setup:skip-no-benefits": "node backend/setup.js --skip-no-benefits",
     "setup:prod": "NODE_ENV=production node backend/setup.js --skip-no-benefits",
-    "db:optimize": "node backend/optimize-database.js",
+    "db:optimize": "node backend/db/init-optimize.js",
     "db:test": "node backend/performance-test.js",
+    "test:performance": "node backend/performance-test-refactored.js",
     "benchmark": "node backend/benchmark-api.js"
   },
   "dependencies": {

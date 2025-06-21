@@ -10,65 +10,62 @@
   
   const dispatch = createEventDispatcher();
   
-  // 安全なデータアクセス
-  $: safeStock = {
+  // データ正規化（最適化版）
+  $: s = {
     code: stock?.code || '',
     name: stock?.name || '',
     price: stock?.price || 0,
     dividendYield: stock?.dividendYield || 0,
     benefitYield: stock?.benefitYield || 0,
     totalYield: stock?.totalYield || 0,
-    shareholderBenefits: stock?.shareholderBenefits || [],
+    benefits: stock?.shareholderBenefits || [],
     hasLongTermHolding: stock?.hasLongTermHolding || false,
     rsi14: stock?.rsi14,
     rsi28: stock?.rsi28,
     rsi14Stats: stock?.rsi14Stats,
-    rsi28Stats: stock?.rsi28Stats,
-    annualDividend: stock?.annualDividend || 0,
-    totalBenefitValue: stock?.totalBenefitValue || 0,
-    minShares: stock?.minShares || 100
+    rsi28Stats: stock?.rsi28Stats
   };
   
-  const handleUpdatePrice = () => dispatch('updatePrice', { code: safeStock.code });
+  const handleUpdatePrice = () => dispatch('updatePrice', { code: s.code });
   
 </script>
 
 <div class="stock-card">
   <div class="stock-header">
     <div class="stock-info">
-      <div class="stock-code">{safeStock.code}</div>
-      <h3 class="stock-name">{safeStock.name}</h3>
-      {#if safeStock.hasLongTermHolding}
+      <div class="stock-code">{s.code}</div>
+      <h3 class="stock-name">{s.name}</h3>
+      {#if s.hasLongTermHolding}
         <div class="long-term-badge">長期保有優遇</div>
       {/if}
     </div>
     <div class="stock-price">
-      <div class="price">¥{formatPrice(safeStock.price)}</div>
+      <div class="price">¥{formatPrice(s.price)}</div>
       <button class="update-btn" on:click={handleUpdatePrice} title="株価を更新">🔄</button>
     </div>
   </div>
   
-  {#if showRSI && (safeStock.rsi14 != null || safeStock.rsi28 != null)}
+  {#if showRSI && (s.rsi14 != null || s.rsi28 != null)}
     <div class="rsi-section">
       <div class="rsi-item">
         <div class="rsi-label">RSI(14)</div>
-        <div class="rsi-value" style="color: {getRSIColor(safeStock.rsi14)}">
-          {safeStock.rsi14 != null ? formatPercent(safeStock.rsi14) : '-'}
-          {#if safeStock.rsi14Stats?.percentile != null}
-            <span class="rsi-percentile">({formatPercent(safeStock.rsi14Stats.percentile)}%ile)</span>
+        <div class="rsi-value" style="color: {getRSIColor(s.rsi14)}">
+          {s.rsi14 != null ? formatPercent(s.rsi14) : '-'}
+          {#if s.rsi14Stats?.percentile != null}
+            <span class="rsi-percentile">({formatPercent(s.rsi14Stats.percentile)}%ile)</span>
           {/if}
         </div>
-        <div class="rsi-status">{getRSIStatus(safeStock.rsi14)}</div>
+        <div class="rsi-status">{getRSIStatus(s.rsi14)}</div>
       </div>
       <div class="rsi-item">
         <div class="rsi-label">RSI(28)</div>
-        <div class="rsi-value" style="color: {getRSIColor(safeStock.rsi28)}">
-          {safeStock.rsi28 != null ? formatPercent(safeStock.rsi28) : '-'}
-          {#if safeStock.rsi28Stats?.percentile != null}
-            <span class="rsi-percentile">({formatPercent(safeStock.rsi28Stats.percentile)}%ile)</span>
+        <div class="rsi-value" style="color: {getRSIColor(s.rsi28)}">
+          {s.rsi28 != null ? formatPercent(s.rsi28) : '-'}
+          {#if s.rsi28Stats?.percentile != null}
+            <span class="rsi-percentile">({formatPercent(s.rsi28Stats.percentile)}%ile)</span>
           {/if}
         </div>
-        <div class="rsi-status">{getRSIStatus(safeStock.rsi28)}</div>
+        <div class="rsi-status">{getRSIStatus(s.rsi28)}</div>
       </div>
     </div>
   {/if}
@@ -76,23 +73,23 @@
   <div class="yield-section">
     <div class="yield-item">
       <div class="yield-label">配当利回り</div>
-      <div class="yield-value">{formatPercent(safeStock.dividendYield)}%</div>
+      <div class="yield-value">{formatPercent(s.dividendYield)}%</div>
     </div>
     <div class="yield-item">
       <div class="yield-label">優待利回り</div>
-      <div class="yield-value">{formatPercent(safeStock.benefitYield)}%</div>
+      <div class="yield-value">{formatPercent(s.benefitYield)}%</div>
     </div>
     <div class="yield-item total">
       <div class="yield-label">総合利回り</div>
-      <div class="yield-value">{formatPercent(safeStock.totalYield)}%</div>
+      <div class="yield-value">{formatPercent(s.totalYield)}%</div>
     </div>
   </div>
   
-  {#if safeStock.shareholderBenefits.length > 0}
+  {#if s.benefits.length > 0}
     <div class="benefits-section">
       <h4 class="benefits-title">株主優待内容</h4>
       <div class="benefits-list">
-        {#each safeStock.shareholderBenefits as benefit}
+        {#each s.benefits as benefit}
           <div class="benefit-item">
             <div class="benefit-header">
               <span 

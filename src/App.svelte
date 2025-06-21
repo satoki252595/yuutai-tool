@@ -4,21 +4,16 @@
   import { searchStocks, updateStockPrice, getBenefitTypes, getRightsMonths } from './lib/api.js';
   import { INITIAL_FILTERS } from './lib/utils.js';
 
-  // 状態管理
+  // 状態管理（最適化版）
   let stocks = [];
   let loading = true;
   let error = null;
   let searchQuery = '';
   let filters = { ...INITIAL_FILTERS };
   let showRSI = true;
-  
-  // ページネーション
   let currentPage = 1;
   let totalPages = 1;
   let totalCount = 0;
-  let pageSize = 50;
-  
-  // 選択肢リスト
   let benefitTypes = [];
   let rightsMonths = [];
   
@@ -33,50 +28,40 @@
     error = null;
     
     try {
-      const response = await searchStocks({ 
+      const { stocks: data, pagination } = await searchStocks({ 
         search: searchQuery, 
         ...filters,
         page: currentPage,
-        limit: pageSize
+        limit: 20  // 20件固定
       });
       
-      // ページネーション対応
-      if (response.stocks) {
-        stocks = response.stocks;
-        totalCount = response.pagination.total;
-        totalPages = response.pagination.totalPages;
-        currentPage = response.pagination.page;
-      } else {
-        // 互換性のため（古いAPIレスポンス）
-        stocks = response;
-      }
+      stocks = data;
+      ({ total: totalCount, totalPages, page: currentPage } = pagination);
     } catch (err) {
       error = '株式情報の取得に失敗しました。サーバーが起動していることを確認してください。';
-      console.error('Error loading stocks:', err);
     } finally {
       loading = false;
     }
   }
   
-  // ページ変更
-  async function changePage(page) {
-    if (page < 1 || page > totalPages) return;
-    currentPage = page;
-    await loadStocks();
-  }
+  // イベントハンドラー（最適化版）
+  const changePage = page => {
+    if (page >= 1 && page <= totalPages) {
+      currentPage = page;
+      loadStocks();
+    }
+  };
 
-  async function loadFilterOptions() {
+  const loadFilterOptions = async () => {
     try {
       [benefitTypes, rightsMonths] = await Promise.all([
         getBenefitTypes(),
         getRightsMonths()
       ]);
-    } catch (err) {
-      console.error('Error loading filter options:', err);
-    }
-  }
+    } catch {}
+  };
 
-  const handleSearch = (e) => {
+  const handleSearch = e => {
     e.preventDefault();
     loadStocks();
   };
@@ -93,9 +78,7 @@
     try {
       await updateStockPrice(code);
       await loadStocks();
-    } catch (err) {
-      console.error('Error updating price:', err);
-    }
+    } catch {}
   };
 
   onMount(async () => {

@@ -4,7 +4,7 @@ import compression from 'compression';
 import { Database } from './database.js';
 import { YahooFinanceService } from './yahooFinance.js';
 import { RSICalculator } from './rsiCalculator.js';
-import { cacheService } from './cache-service.js';
+import { cacheService } from './cache-service-enhanced.js';
 import { PRODUCTION_CONFIG } from './production-optimizations.js';
 
 const app = express();
@@ -62,247 +62,233 @@ const db = new Database();
 const yahooFinance = new YahooFinanceService();
 const rsiCalculator = new RSICalculator();
 
-// 改良されたキャッシュミドルウェア
-const cacheMiddleware = (req, res, next) => {
-  const key = req.originalUrl;
-  const cached = cacheService.get(key);
+// キャッシュミドルウェア（強化版）
+const cacheMiddleware = (ttl) => (req, res, next) => {
+  const cached = cacheService.get(req.originalUrl);
+  if (cached) return res.json(cached);
   
-  if (cached) {
-    return res.json(cached);
-  }
-  
-  // オリジナルのjson関数を保存
   const originalJson = res.json;
   res.json = function(data) {
-    cacheService.set(key, data);
+    cacheService.set(req.originalUrl, data, ttl);
     originalJson.call(this, data);
   };
-  
   next();
 };
 
-// 優待利回り・総合利回り計算
-function calculateYields(stock, benefits) {
-  if (!stock.price || stock.price === 0) {
-    return { dividendYield: 0, benefitYield: 0, totalYield: 0 };
+// 利回り計算ヘルパー関数群
+const findMinSharesBenefit = benefits => 
+  benefits.reduce((min, b) => (b.min_shares || 100) < (min.min_shares || 100) ? b : min);
+
+const groupBenefitsByShares = benefits => {
+  const groups = {};
+  for (const benefit of benefits) {
+    const shares = benefit.min_shares || 100;
+    (groups[shares] ||= []).push(benefit);
   }
+  return groups;
+};
+
+const calculateAnnualBenefitValue = benefits => {
+  const monthlyBenefits = new Map();
+  for (const benefit of benefits) {
+    const month = benefit.ex_rights_month || 3;
+    monthlyBenefits.set(month, benefit);
+  }
+  let total = 0;
+  for (const benefit of monthlyBenefits.values()) {
+    total += benefit.monetary_value || 0;
+  }
+  return total;
+};
+
+const roundYield = value => Math.round(value * 100) / 100;
+
+// 優待利回り・総合利回り計算（最適化版）
+function calculateYields(stock, benefits) {
+  if (!stock.price) return { dividendYield: 0, benefitYield: 0, totalYield: 0 };
   
   const dividendYield = stock.dividend_yield || 0;
-  
-  // 優待利回り計算: 優待金銭価値 ÷ (優待必要株式数 × 株価) × 100
   let benefitYield = 0;
+  
   if (benefits.length > 0) {
-    // 最小株式数での優待を基準に計算
-    const minSharesBenefit = benefits.reduce((min, benefit) => {
-      return (benefit.min_shares || 100) < (min.min_shares || 100) ? benefit : min;
-    });
-    
+    const minSharesBenefit = findMinSharesBenefit(benefits);
     const requiredShares = minSharesBenefit.min_shares || 100;
     const investmentAmount = stock.price * requiredShares;
     
-    // 年間の優待価値を計算
-    // 同じ株式数要件の優待をグループ化
-    const shareGroups = {};
-    benefits.forEach(benefit => {
-      const shares = benefit.min_shares || 100;
-      if (!shareGroups[shares]) {
-        shareGroups[shares] = [];
-      }
-      shareGroups[shares].push(benefit);
-    });
-    
-    // 最小株式数グループの優待価値を計算
+    const shareGroups = groupBenefitsByShares(benefits);
     const minSharesGroup = shareGroups[requiredShares] || [];
-    let annualBenefitValue = 0;
     
     if (minSharesGroup.length > 0) {
-      // 権利月ごとにグループ化
-      const monthlyBenefits = {};
-      minSharesGroup.forEach(benefit => {
-        const month = benefit.ex_rights_month || 3;
-        monthlyBenefits[month] = benefit;
-      });
-      
-      // 各権利月の価値を合計
-      annualBenefitValue = Object.values(monthlyBenefits).reduce((sum, benefit) => {
-        return sum + (benefit.monetary_value || 0);
-      }, 0);
+      const annualValue = calculateAnnualBenefitValue(minSharesGroup);
+      benefitYield = (annualValue / investmentAmount) * 100;
     }
-    
-    benefitYield = (annualBenefitValue / investmentAmount) * 100;
   }
   
-  const totalYield = dividendYield + benefitYield;
-  
   return {
-    dividendYield: Math.round(dividendYield * 100) / 100,
-    benefitYield: Math.round(benefitYield * 100) / 100,
-    totalYield: Math.round(totalYield * 100) / 100
+    dividendYield: roundYield(dividendYield),
+    benefitYield: roundYield(benefitYield),
+    totalYield: roundYield(dividendYield + benefitYield)
   };
 }
 
-// 株式一覧取得（高速化 + キャッシュ機能付き）
-app.get('/api/stocks', cacheMiddleware, async (req, res) => {
+// フィルター関数群
+const applyFilters = {
+  benefitType: (stocks, type) => type && type !== 'all' 
+    ? stocks.filter(s => s.benefitGenres.includes(type)) : stocks,
+  
+  rightsMonth: (stocks, month) => month && month !== 'all'
+    ? stocks.filter(s => s.rightsMonths.includes(parseInt(month))) : stocks,
+  
+  rsiFilter: (stocks, filter) => {
+    if (!filter || filter === 'all') return stocks;
+    return stocks.filter(s => {
+      const rsi = s.rsi14;
+      if (rsi == null) return false;
+      return filter === 'oversold' ? rsi < 30 : 
+             filter === 'overbought' ? rsi > 70 : 
+             rsi >= 30 && rsi <= 70;
+    });
+  },
+  
+  longTermHolding: (stocks, holding) => {
+    if (!holding || holding === 'all') return stocks;
+    return stocks.filter(s => holding === 'yes' ? s.hasLongTermHolding : !s.hasLongTermHolding);
+  }
+};
+
+// 株式データ変換関数
+const transformStockData = (stock, benefits, yields) => ({
+  code: stock.code,
+  name: stock.display_name || stock.name,
+  originalName: stock.name,
+  japaneseName: stock.japanese_name,
+  market: stock.market,
+  industry: stock.industry,
+  price: stock.price || 0,
+  dividendYield: yields.dividendYield,
+  benefitYield: yields.benefitYield,
+  totalYield: yields.totalYield,
+  benefitCount: stock.benefit_count || 0,
+  benefitGenres: stock.benefit_types ? 
+    [...new Set(stock.benefit_types.split(',').filter(Boolean))] : [],
+  rightsMonths: stock.rights_months ? 
+    [...new Set(stock.rights_months.split(',').map(Number).filter(Boolean))] : [],
+  hasLongTermHolding: stock.has_long_term_holding === 1,
+  minShares: stock.min_shares || 100,
+  shareholderBenefits: benefits,
+  annualDividend: stock.annual_dividend || 0,
+  dataSource: stock.data_source || 'unknown',
+  rsi14: stock.rsi,
+  rsi28: stock.rsi28,
+  rsi14Stats: { status: 'unknown', level: null },
+  rsi28Stats: { status: 'unknown', level: null }
+});
+
+// 株式一覧取得API（最適化版）
+app.get('/api/stocks', cacheMiddleware(60000), async (req, res) => {
   try {
-    const { 
-      search, 
-      sortBy = 'totalYield', 
-      sortOrder = 'desc',
-      benefitType,
-      rightsMonth,
-      rsiFilter,
-      longTermHolding,
-      page = 1,
-      limit = 50
-    } = req.query;
+    const startTime = process.hrtime.bigint();
+    const { search, sortBy = 'totalYield', sortOrder = 'desc', 
+            benefitType, rightsMonth, rsiFilter, longTermHolding,
+            page = 1, limit = 50 } = req.query;
     
     const pageNum = parseInt(page);
-    // 開発・本番環境共に20件制限で統一
-    const maxLimit = 20;
-    const defaultLimit = 20;
-    
-    const limitNum = Math.min(
-      parseInt(limit) || defaultLimit, 
-      maxLimit
-    );
+    const limitNum = Math.min(parseInt(limit) || 20, 20);
     
     console.log(`📊 Fetching page ${pageNum} with limit ${limitNum}...`);
-    const startTime = process.hrtime.bigint();
     
-    // 開発・本番環境共に軽量版を使用（高速化）
-    const queryMethod = 'getStocksWithBenefitsPaginatedLite';
-    
-    const result = await db[queryMethod]({
-      search,
-      sortBy,
-      sortOrder,
-      page: pageNum,
-      limit: limitNum
+    // DBクエリ実行
+    const result = await db.getStocksWithBenefitsPaginatedLite({
+      search, sortBy, sortOrder, page: pageNum, limit: limitNum
     });
-    
-    const stocks = result.stocks;
-    const pagination = result.pagination;
     
     const dbTime = Number(process.hrtime.bigint() - startTime) / 1000000;
-    console.log(`📊 DB query completed in ${dbTime.toFixed(2)}ms for ${stocks.length} stocks`);
+    console.log(`📊 DB query completed in ${dbTime.toFixed(2)}ms`);
     
-    // 超軽量版：優待情報の詳細取得をスキップ
-    let stocksWithDetails = stocks.map(stock => {
-      // 簡略化された利回り計算
-      const dividendYield = stock.dividend_yield || 0;
-      const benefitYield = 0; // 優待利回りは0に固定（高速化）
-      const totalYield = dividendYield + benefitYield;
-      
-      return {
-        code: stock.code,
-        name: stock.display_name || stock.name,
-        originalName: stock.name,
-        japaneseName: stock.japanese_name,
-        market: 'jp_market',
-        industry: null,
-        price: stock.price || 0,
-        dividendYield: Math.round(dividendYield * 100) / 100,
-        benefitYield: Math.round(benefitYield * 100) / 100,
-        totalYield: Math.round(totalYield * 100) / 100,
-        benefitCount: stock.benefit_count || 0,
-        benefitGenres: [],
-        rightsMonths: [],
-        hasLongTermHolding: false,
-        minShares: stock.min_shares || 100,
-        shareholderBenefits: [], // 空配列で高速化
-        annualDividend: stock.annual_dividend || 0,
-        dataSource: 'lite_mode',
-        rsi14: null,
-        rsi28: null,
-        rsi14Stats: { status: 'unknown', level: null },
-        rsi28Stats: { status: 'unknown', level: null }
-      };
+    // 優待情報一括取得
+    const stockCodes = result.stocks.map(s => s.code);
+    const benefitsByCode = await db.getBenefitsByStockCodes(stockCodes);
+    
+    // データ変換
+    let stocksWithDetails = result.stocks.map(stock => {
+      const benefits = benefitsByCode[stock.code] || [];
+      const yields = calculateYields(stock, benefits);
+      return transformStockData(stock, benefits, yields);
     });
     
-    // フィルター処理をスキップ（高速化優先）
-    // 注意: 軽量モードではフィルター機能は制限されます
+    // フィルター適用
+    stocksWithDetails = applyFilters.benefitType(stocksWithDetails, benefitType);
+    stocksWithDetails = applyFilters.rightsMonth(stocksWithDetails, rightsMonth);
+    stocksWithDetails = applyFilters.rsiFilter(stocksWithDetails, rsiFilter);
+    stocksWithDetails = applyFilters.longTermHolding(stocksWithDetails, longTermHolding);
     
     const totalTime = Number(process.hrtime.bigint() - startTime) / 1000000;
-    console.log(`📊 Total processing time: ${totalTime.toFixed(2)}ms`);
+    console.log(`📊 Total time: ${totalTime.toFixed(2)}ms`);
     
-    // レスポンス（ページングは既にDBレベルで処理済み）
-    res.json({
-      stocks: stocksWithDetails,
-      pagination
-    });
+    res.json({ stocks: stocksWithDetails, pagination: result.pagination });
   } catch (error) {
     console.error('Error fetching stocks:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// 個別銘柄詳細取得
-app.get('/api/stocks/:code', async (req, res) => {
-  try {
-    const { code } = req.params;
-    const stocks = await db.getStocksWithBenefits(code);
-    
-    if (stocks.length === 0) {
-      return res.status(404).json({ error: 'Stock not found' });
-    }
-    
-    const stock = stocks[0];
-    const benefits = await db.getBenefitsByStockCode(code);
-    
-    // 最新の株価を取得
-    try {
-      const latestPrice = await yahooFinance.getStockPrice(code);
-      await db.insertPriceHistory(latestPrice);
-      stock.price = latestPrice.price;
-      stock.dividend_yield = latestPrice.dividendYield;
-    } catch (error) {
-      console.error('Error updating price:', error);
-    }
-    
-    const yields = calculateYields(stock, benefits);
-    
-    res.json({
-      ...stock,
-      dividendYield: yields.dividendYield,
-      benefitYield: yields.benefitYield,
-      totalYield: yields.totalYield,
-      shareholderBenefits: benefits
-    });
-  } catch (error) {
-    console.error('Error fetching stock details:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+// エラーハンドラーミドルウェア
+const asyncHandler = fn => (req, res, next) => 
+  Promise.resolve(fn(req, res, next)).catch(next);
 
-// 株価更新
-app.post('/api/stocks/:code/update-price', async (req, res) => {
-  try {
-    const { code } = req.params;
-    const stockPrice = await yahooFinance.getStockPrice(code);
-    await db.insertPriceHistory(stockPrice);
-    res.json(stockPrice);
-  } catch (error) {
-    console.error('Error updating price:', error);
-    res.status(500).json({ error: 'Failed to update price' });
-  }
-});
+// 統一エラーハンドラー
+const errorHandler = (err, req, res, next) => {
+  console.error('Error:', err);
+  const status = err.status || 500;
+  const message = isProduction ? 'Internal server error' : err.message;
+  res.status(status).json({ error: message });
+};
 
-// 優待情報の追加/更新
-app.post('/api/stocks/:code/benefits', async (req, res) => {
-  try {
-    const { code } = req.params;
-    const benefit = {
-      stockCode: code,
-      ...req.body
-    };
-    
-    await db.insertBenefit(benefit);
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Error adding benefit:', error);
-    res.status(500).json({ error: 'Failed to add benefit' });
+// 個別銘柄詳細取得（最適化版）
+app.get('/api/stocks/:code', asyncHandler(async (req, res) => {
+  const { code } = req.params;
+  const stocks = await db.getStocksWithBenefits(code);
+  
+  if (stocks.length === 0) {
+    return res.status(404).json({ error: 'Stock not found' });
   }
-});
+  
+  const stock = stocks[0];
+  const benefits = await db.getBenefitsByStockCode(code);
+  
+  // 最新株価取得（エラーハンドリング付き）
+  try {
+    const latestPrice = await yahooFinance.getStockPrice(code);
+    await db.insertPriceHistory(latestPrice);
+    stock.price = latestPrice.price;
+    stock.dividend_yield = latestPrice.dividendYield;
+  } catch (error) {
+    console.error('Price update failed:', error);
+  }
+  
+  const yields = calculateYields(stock, benefits);
+  
+  res.json({
+    ...stock,
+    ...yields,
+    shareholderBenefits: benefits
+  });
+}));
+
+// 株価更新（最適化版）
+app.post('/api/stocks/:code/update-price', asyncHandler(async (req, res) => {
+  const { code } = req.params;
+  const stockPrice = await yahooFinance.getStockPrice(code);
+  await db.insertPriceHistory(stockPrice);
+  res.json(stockPrice);
+}));
+
+// 優待情報の追加/更新（最適化版）
+app.post('/api/stocks/:code/benefits', asyncHandler(async (req, res) => {
+  const { code } = req.params;
+  await db.insertBenefit({ stockCode: code, ...req.body });
+  res.json({ success: true });
+}));
 
 // 優待ジャンル一覧取得（改善版）
 app.get('/api/benefit-types', async (req, res) => {
@@ -404,6 +390,9 @@ app.post('/api/cache/clear', (req, res) => {
     res.json({ message: 'All cache cleared' });
   }
 });
+
+// エラーハンドラーを最後に追加
+app.use(errorHandler);
 
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);

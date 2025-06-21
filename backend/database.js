@@ -163,70 +163,84 @@ export class Database {
     });
   }
 
-  // 超高速版：最小限のデータのみ取得
-  getStocksWithBenefitsPaginatedLite(options = {}) {
-    const {
-      search = '',
-      sortBy = 'totalYield',
-      sortOrder = 'desc',
-      page = 1,
-      limit = 20
-    } = options;
+  // SQLクエリビルダーヘルパー
+  buildWhereClause(search, params) {
+    if (!search) return '';
+    const searchParam = `%${search}%`;
+    params.push(searchParam, searchParam, searchParam, searchParam);
+    return ` WHERE s.code LIKE ? OR s.name LIKE ? OR s.japanese_name LIKE ? OR sb.description LIKE ?`;
+  }
 
+  buildOrderByClause(sortBy, sortOrder) {
+    const orderMap = {
+      totalYield: `(COALESCE(lp.dividend_yield, 0) + COALESCE(total_benefit_value / (lp.price * 100), 0))`,
+      code: 's.code',
+      name: 's.name'
+    };
+    return ` ORDER BY ${orderMap[sortBy] || 'total_benefit_value'} ${sortOrder}`;
+  }
+
+  // 軽量版株式一覧取得（最適化版）
+  async getStocksWithBenefitsPaginatedLite(options = {}) {
+    const { search = '', sortBy = 'totalYield', sortOrder = 'desc', page = 1, limit = 20 } = options;
+    const offset = (page - 1) * limit;
+    
     return new Promise((resolve, reject) => {
-      const offset = (page - 1) * limit;
-      
-      // 超軽量版：JOINを最小化し、集計も簡略化
-      let sql = `
-        SELECT 
-          s.code,
-          s.name,
-          COALESCE(s.japanese_name, s.name) as display_name,
-          COALESCE(lp.price, 0) as price,
-          COALESCE(lp.dividend_yield, 0) as dividend_yield,
-          COALESCE(lp.annual_dividend, 0) as annual_dividend,
-          0 as benefit_count,
-          0 as total_benefit_value,
-          100 as min_shares
+      // 総件数取得
+      const countParams = [];
+      const whereClause = this.buildWhereClause(search, countParams);
+      const countSql = `
+        SELECT COUNT(DISTINCT s.code) as total
         FROM stocks s
+        LEFT JOIN shareholder_benefits sb ON s.code = sb.stock_code
         LEFT JOIN latest_prices lp ON s.code = lp.stock_code
+        ${whereClause}
       `;
-
-      const params = [];
       
-      if (search) {
-        sql += ` WHERE s.code LIKE ? OR s.name LIKE ?`;
-        const searchParam = `%${search}%`;
-        params.push(searchParam, searchParam);
-      }
-
-      // 簡単なソート（パフォーマンス優先）
-      if (sortBy === 'code') {
-        sql += ` ORDER BY s.code ${sortOrder}`;
-      } else {
-        sql += ` ORDER BY lp.dividend_yield ${sortOrder}`;
-      }
-
-      sql += ` LIMIT ? OFFSET ?`;
-      params.push(limit, offset);
-
-      this.db.all(sql, params, (err, rows) => {
-        if (err) {
-          reject(err);
-        } else {
-          // 概算の総件数（固定値で高速化）
-          const estimatedTotal = search ? rows.length * 10 : 1469;
-          
+      this.db.get(countSql, countParams, (err, countResult) => {
+        if (err) return reject(err);
+        
+        const total = countResult.total || 0;
+        
+        // メインクエリ
+        const mainParams = [];
+        const mainWhereClause = this.buildWhereClause(search, mainParams);
+        const orderByClause = this.buildOrderByClause(sortBy, sortOrder);
+        
+        const mainSql = `
+          SELECT 
+            s.code, s.name, COALESCE(s.japanese_name, s.name) as display_name,
+            s.market, s.sector, s.industry, s.rsi, s.rsi28,
+            lp.price, lp.dividend_yield, lp.annual_dividend, lp.data_source,
+            COUNT(DISTINCT sb.id) as benefit_count,
+            SUM(sb.monetary_value) as total_benefit_value,
+            GROUP_CONCAT(DISTINCT sb.benefit_type) as benefit_types,
+            GROUP_CONCAT(DISTINCT sb.ex_rights_month) as rights_months,
+            MAX(sb.has_long_term_holding) as has_long_term_holding,
+            MIN(sb.min_shares) as min_shares
+          FROM stocks s
+          LEFT JOIN shareholder_benefits sb ON s.code = sb.stock_code
+          LEFT JOIN latest_prices lp ON s.code = lp.stock_code
+          ${mainWhereClause}
+          GROUP BY s.code
+          ${orderByClause}
+          LIMIT ? OFFSET ?
+        `;
+        
+        mainParams.push(limit, offset);
+        
+        this.db.all(mainSql, mainParams, (err, rows) => {
+          if (err) return reject(err);
           resolve({
             stocks: rows || [],
             pagination: {
               page: parseInt(page),
               limit: parseInt(limit),
-              total: estimatedTotal,
-              totalPages: Math.ceil(estimatedTotal / limit)
+              total,
+              totalPages: Math.ceil(total / limit)
             }
           });
-        }
+        });
       });
     });
   }
@@ -333,43 +347,28 @@ export class Database {
     });
   }
 
-  // 総合情報の取得（最適化済み - latest_pricesテーブル使用）
-  getStocksWithBenefits(search = '') {
+  // 総合情報取得（最適化版）
+  async getStocksWithBenefits(search = '') {
+    const params = [];
+    const whereClause = this.buildWhereClause(search, params);
+    
+    const sql = `
+      SELECT 
+        s.code, s.name, COALESCE(s.japanese_name, s.name) as display_name,
+        s.market, s.sector, s.industry, s.rsi, s.rsi28,
+        lp.price, lp.dividend_yield, lp.annual_dividend, lp.data_source,
+        COUNT(DISTINCT sb.id) as benefit_count,
+        SUM(sb.monetary_value) as total_benefit_value
+      FROM stocks s
+      LEFT JOIN shareholder_benefits sb ON s.code = sb.stock_code
+      LEFT JOIN latest_prices lp ON s.code = lp.stock_code
+      ${whereClause}
+      GROUP BY s.code 
+      ORDER BY total_benefit_value DESC
+    `;
+    
     return new Promise((resolve, reject) => {
-      let sql = `
-        SELECT 
-          s.code,
-          s.name,
-          COALESCE(s.japanese_name, s.name) as display_name,
-          s.market,
-          s.sector,
-          s.industry,
-          s.rsi,
-          s.rsi28,
-          lp.price,
-          lp.dividend_yield,
-          lp.annual_dividend,
-          lp.data_source,
-          COUNT(DISTINCT sb.id) as benefit_count,
-          SUM(sb.monetary_value) as total_benefit_value
-        FROM stocks s
-        LEFT JOIN shareholder_benefits sb ON s.code = sb.stock_code
-        LEFT JOIN latest_prices lp ON s.code = lp.stock_code
-      `;
-
-      const params = [];
-      if (search) {
-        sql += ` WHERE s.code LIKE ? OR s.name LIKE ? OR s.japanese_name LIKE ? OR sb.description LIKE ?`;
-        const searchParam = `%${search}%`;
-        params.push(searchParam, searchParam, searchParam, searchParam);
-      }
-
-      sql += ` GROUP BY s.code ORDER BY total_benefit_value DESC`;
-
-      this.db.all(sql, params, (err, rows) => {
-        if (err) reject(err);
-        else resolve(rows);
-      });
+      this.db.all(sql, params, (err, rows) => err ? reject(err) : resolve(rows));
     });
   }
 
@@ -406,28 +405,41 @@ export class Database {
     });
   }
 
-  // 一括株価履歴の保存
+  // トランザクション付きバルク挿入
   async insertBulkPriceHistory(stockCode, priceHistory) {
     return new Promise((resolve, reject) => {
-      const stmt = this.db.prepare(`
-        INSERT OR IGNORE INTO price_history (stock_code, price, recorded_at)
-        VALUES (?, ?, ?)
-      `);
-      
-      let insertedCount = 0;
-      
-      priceHistory.forEach(data => {
-        stmt.run([stockCode, data.price, data.date.toISOString()], (err) => {
-          if (!err) insertedCount++;
-        });
-      });
-      
-      stmt.finalize((err) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve(insertedCount);
+      this.db.serialize(() => {
+        this.db.run('BEGIN TRANSACTION');
+        
+        const stmt = this.db.prepare(`
+          INSERT OR IGNORE INTO price_history (stock_code, price, recorded_at)
+          VALUES (?, ?, ?)
+        `);
+        
+        let insertedCount = 0;
+        let errorOccurred = false;
+        
+        for (const data of priceHistory) {
+          stmt.run([stockCode, data.price, data.date.toISOString()], err => {
+            if (err) {
+              errorOccurred = true;
+              this.db.run('ROLLBACK');
+              reject(err);
+            } else {
+              insertedCount++;
+            }
+          });
+          if (errorOccurred) break;
         }
+        
+        stmt.finalize(() => {
+          if (!errorOccurred) {
+            this.db.run('COMMIT', err => {
+              if (err) reject(err);
+              else resolve(insertedCount);
+            });
+          }
+        });
       });
     });
   }
